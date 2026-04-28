@@ -455,14 +455,16 @@ function filterJobsForCurrentClaudeSession(jobs) {
   return jobs.filter((job) => job.sessionId === sessionId);
 }
 
-function findLatestResumableTaskJob(jobs) {
+function findLatestResumableTaskJob(jobs, options = {}) {
+  const kind = options.kind ?? null;
   return (
     jobs.find(
       (job) =>
         job.jobClass === "task" &&
         job.threadId &&
         job.status !== "queued" &&
-        job.status !== "running"
+        job.status !== "running" &&
+        (kind == null || job.kind === kind)
     ) ?? null
   );
 }
@@ -488,19 +490,24 @@ async function waitForSingleJobSnapshot(cwd, reference, options = {}) {
 async function resolveLatestTrackedTaskThread(cwd, options = {}) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   const sessionId = getCurrentClaudeSessionId();
+  const kind = options.kind ?? null;
   const jobs = sortJobsNewestFirst(listJobs(workspaceRoot)).filter((job) => job.id !== options.excludeJobId);
   const visibleJobs = filterJobsForCurrentClaudeSession(jobs);
-  const activeTask = visibleJobs.find((job) => job.jobClass === "task" && (job.status === "queued" || job.status === "running"));
+  const activeTask = visibleJobs.find((job) => job.jobClass === "task" && (job.status === "queued" || job.status === "running") && (kind == null || job.kind === kind));
   if (activeTask) {
     throw new Error(`Task ${activeTask.id} is still running. Use /codex:status before continuing it.`);
   }
 
-  const trackedTask = findLatestResumableTaskJob(visibleJobs);
+  const trackedTask = findLatestResumableTaskJob(visibleJobs, { kind });
   if (trackedTask) {
     return { id: trackedTask.threadId };
   }
 
   if (sessionId) {
+    return null;
+  }
+
+  if (kind != null) {
     return null;
   }
 
@@ -691,7 +698,8 @@ async function executeTaskRun(request) {
   let resumeThreadId = null;
   if (request.resumeLast) {
     const latestThread = await resolveLatestTrackedTaskThread(workspaceRoot, {
-      excludeJobId: request.jobId
+      excludeJobId: request.jobId,
+      kind: request.kind ?? null
     });
     if (!latestThread) {
       throw new Error("No previous Codex task thread was found for this repository.");
@@ -819,10 +827,10 @@ function createTrackedProgress(job, options = {}) {
   };
 }
 
-function buildTaskJob(workspaceRoot, taskMetadata, write) {
+function buildTaskJob(workspaceRoot, taskMetadata, write, kind = "task") {
   return createCompanionJob({
     prefix: "task",
-    kind: "task",
+    kind,
     title: taskMetadata.title,
     workspaceRoot,
     jobClass: "task",
@@ -831,7 +839,7 @@ function buildTaskJob(workspaceRoot, taskMetadata, write) {
   });
 }
 
-function buildTaskRequest({ cwd, model, effort, prompt, write, resumeLast, jobId }) {
+function buildTaskRequest({ cwd, model, effort, prompt, write, resumeLast, jobId, kind }) {
   return {
     cwd,
     model,
@@ -839,6 +847,7 @@ function buildTaskRequest({ cwd, model, effort, prompt, write, resumeLast, jobId
     prompt,
     write,
     resumeLast,
+    kind,
     jobId
   };
 }
@@ -1034,6 +1043,13 @@ async function handleExecute(argv) {
     throw new Error("Choose either --resume/--resume-last or --fresh.");
   }
 
+  const phase = options.phase || "implement";
+  const phaseKindMap = { implement: "execute", "write-tests": "execute-test", "fix-tests": "execute-fix" };
+  const kind = phaseKindMap[phase];
+  if (!kind) {
+    throw new Error(`Unknown phase: ${phase}. Use implement, write-tests, or fix-tests.`);
+  }
+
   const contextFilePath = options["context-file"];
   let prompt;
   let phaseLabel;
@@ -1053,7 +1069,6 @@ async function handleExecute(argv) {
       context.vaultFolder = path.resolve(cwd, options.path);
     }
 
-    const phase = options.phase || "implement";
     switch (phase) {
       case "implement":
         prompt = buildExecutePrompt(context);
@@ -1067,8 +1082,6 @@ async function handleExecute(argv) {
         prompt = buildExecuteFixPrompt(context);
         phaseLabel = "Fix Tests";
         break;
-      default:
-        throw new Error(`Unknown phase: ${phase}. Use implement, write-tests, or fix-tests.`);
     }
   }
 
@@ -1079,14 +1092,14 @@ async function handleExecute(argv) {
 
   if (options.background) {
     ensureCodexAvailable(cwd);
-    const job = buildTaskJob(workspaceRoot, taskMetadata, write);
-    const request = buildTaskRequest({ cwd, model, effort, prompt, write, resumeLast, jobId: job.id });
+    const job = buildTaskJob(workspaceRoot, taskMetadata, write, kind);
+    const request = buildTaskRequest({ cwd, model, effort, prompt, write, resumeLast, jobId: job.id, kind });
     const { payload } = enqueueBackgroundTask(cwd, job, request);
     outputCommandResult(payload, renderQueuedTaskLaunch(payload), options.json);
     return;
   }
 
-  const job = buildTaskJob(workspaceRoot, taskMetadata, write);
+  const job = buildTaskJob(workspaceRoot, taskMetadata, write, kind);
   await runForegroundCommand(
     job,
     (progress) =>
@@ -1096,6 +1109,7 @@ async function handleExecute(argv) {
         effort,
         prompt,
         write,
+        kind,
         resumeLast,
         jobId: job.id,
         onProgress: progress
