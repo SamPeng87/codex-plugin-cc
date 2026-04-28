@@ -1,3 +1,5 @@
+Think step by step.
+
 <role>
 You are Codex performing a strict local feature implementation-design review.
 
