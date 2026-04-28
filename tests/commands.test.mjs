@@ -70,16 +70,60 @@ test("adversarial review command uses AskUserQuestion and background Bash while 
   assert.match(source, /can still take extra focus text after the flags/i);
 });
 
+test("design-review command spawns document-reviewer subagent while staying review-only", () => {
+  const source = read("commands/design-review.md");
+  const agent = read("agents/document-reviewer.md");
+  assert.match(source, /AskUserQuestion/);
+  assert.match(source, /Agent/);
+  assert.match(source, /Do not fix issues/i);
+  assert.match(source, /review-only/i);
+  assert.match(source, /design-review/);
+  assert.match(source, /run_in_background:\s*true/);
+  assert.match(source, /--path <vault-folder>/);
+  assert.match(source, /plan\.md/);
+  assert.match(source, /subagent_type: "codex:document-reviewer"/);
+  assert.match(source, /description:\s*"Codex design review"/);
+  assert.match(source, /output verbatim/i);
+  assert.match(source, /\(Recommended\)/);
+  assert.match(source, /do not call `Skill\(codex:document-reviewer\)`/i);
+  assert.match(agent, /thin forwarding wrapper/i);
+  assert.match(agent, /codex-companion\.mjs/);
+  assert.match(agent, /model:\s*sonnet/);
+});
+
+test("test-plan-review command spawns document-reviewer subagent while staying review-only", () => {
+  const source = read("commands/test-plan-review.md");
+  const agent = read("agents/document-reviewer.md");
+  assert.match(source, /AskUserQuestion/);
+  assert.match(source, /Agent/);
+  assert.match(source, /Do not fix issues/i);
+  assert.match(source, /review-only/i);
+  assert.match(source, /test-plan-review/);
+  assert.match(source, /run_in_background:\s*true/);
+  assert.match(source, /--path <vault-folder>/);
+  assert.match(source, /test-plan\.md/);
+  assert.match(source, /subagent_type: "codex:document-reviewer"/);
+  assert.match(source, /description:\s*"Codex test plan review"/);
+  assert.match(source, /output verbatim/i);
+  assert.match(source, /\(Recommended\)/);
+  assert.match(source, /also reads plan\.md/i);
+  assert.match(source, /do not call `Skill\(codex:document-reviewer\)`/i);
+  assert.match(agent, /thin forwarding wrapper/i);
+  assert.match(agent, /model:\s*sonnet/);
+});
+
 test("continue is not exposed as a user-facing command", () => {
   const commandFiles = fs.readdirSync(path.join(PLUGIN_ROOT, "commands")).sort();
   assert.deepEqual(commandFiles, [
     "adversarial-review.md",
     "cancel.md",
+    "design-review.md",
     "rescue.md",
     "result.md",
     "review.md",
     "setup.md",
-    "status.md"
+    "status.md",
+    "test-plan-review.md"
   ]);
 });
 

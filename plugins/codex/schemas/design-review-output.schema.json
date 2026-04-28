@@ -1,0 +1,250 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "decision",
+    "summary",
+    "stats",
+    "findings"
+  ],
+  "properties": {
+    "decision": {
+      "type": "string",
+      "enum": [
+        "approve",
+        "needs-attention"
+      ]
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "stats": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requirements_extracted",
+        "requirements_ready_to_implement",
+        "requirements_partially_ready",
+        "requirements_ambiguous_or_unimplementable",
+        "code_touchpoints_identified",
+        "code_touchpoints_missing_or_ambiguous",
+        "findings_count"
+      ],
+      "properties": {
+        "requirements_extracted": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "requirements_ready_to_implement": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "requirements_partially_ready": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "requirements_ambiguous_or_unimplementable": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "code_touchpoints_identified": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "code_touchpoints_missing_or_ambiguous": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "findings_count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "severity",
+          "category",
+          "affected_file",
+          "line_start",
+          "line_end",
+          "confidence",
+          "is_inference",
+          "finding",
+          "evidence",
+          "impact",
+          "recommendation",
+          "required_action_type",
+          "auto_check",
+          "related_plan_lines"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "blocker",
+              "major",
+              "minor"
+            ]
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "input-defect",
+              "design-ambiguity",
+              "design-contradiction",
+              "unimplementable-requirement",
+              "implementation-gap",
+              "code-touchpoint-gap",
+              "behavior-gap",
+              "boundary-gap",
+              "negative-path-gap",
+              "state-machine-gap",
+              "lifecycle-gap",
+              "contract-gap",
+              "data-shape-gap",
+              "error-handling-gap",
+              "compatibility-risk",
+              "dependency-risk",
+              "local-nonfunctional-gap",
+              "security-privacy-gap",
+              "insufficient-specificity",
+              "overbroad-design-scope",
+              "obsolete-or-out-of-scope-requirement"
+            ]
+          },
+          "affected_file": {
+            "type": "string",
+            "minLength": 1
+          },
+          "line_start": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "line_end": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0.5,
+            "maximum": 1
+          },
+          "is_inference": {
+            "type": "boolean"
+          },
+          "finding": {
+            "type": "string",
+            "minLength": 1
+          },
+          "evidence": {
+            "type": "string",
+            "minLength": 1
+          },
+          "impact": {
+            "type": "string",
+            "minLength": 1
+          },
+          "recommendation": {
+            "type": "string",
+            "minLength": 1
+          },
+          "required_action_type": {
+            "type": "string",
+            "enum": [
+              "clarify-design",
+              "add-implementation-detail",
+              "identify-code-touchpoint",
+              "define-contract",
+              "define-data-shape",
+              "define-state-rule",
+              "define-error-behavior",
+              "define-boundary-behavior",
+              "resolve-contradiction",
+              "check-compatibility",
+              "verify-dependency",
+              "narrow-scope",
+              "fix-input"
+            ]
+          },
+          "auto_check": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "check_possible",
+              "method",
+              "queries",
+              "expected_evidence"
+            ],
+            "properties": {
+              "check_possible": {
+                "type": "boolean"
+              },
+              "method": {
+                "type": "string",
+                "enum": [
+                  "code_search",
+                  "symbol_search",
+                  "call_graph_inspection",
+                  "type_check",
+                  "static_inspection",
+                  "contract_review",
+                  "schema_review",
+                  "state_flow_inspection",
+                  "branch_inspection",
+                  "dependency_inspection",
+                  "manual_author_input",
+                  "not_auto_checkable"
+                ]
+              },
+              "queries": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "expected_evidence": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "related_plan_lines": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "file",
+              "line_start",
+              "line_end"
+            ],
+            "properties": {
+              "file": {
+                "type": "string",
+                "minLength": 1
+              },
+              "line_start": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "line_end": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

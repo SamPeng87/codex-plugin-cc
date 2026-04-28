@@ -1,0 +1,188 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "decision",
+    "summary",
+    "stats",
+    "findings"
+  ],
+  "properties": {
+    "decision": {
+      "type": "string",
+      "enum": [
+        "approve",
+        "needs-attention"
+      ]
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "stats": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "coverage_items_extracted_from_plan",
+        "coverage_items_covered",
+        "coverage_items_partially_covered",
+        "coverage_items_uncovered",
+        "findings_count"
+      ],
+      "properties": {
+        "coverage_items_extracted_from_plan": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "coverage_items_covered": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "coverage_items_partially_covered": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "coverage_items_uncovered": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "findings_count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "severity",
+          "category",
+          "affected_file",
+          "line_start",
+          "line_end",
+          "confidence",
+          "finding",
+          "evidence",
+          "impact",
+          "recommendation"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "blocker",
+              "major",
+              "minor"
+            ]
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "coverage-gap",
+              "boundary-gap",
+              "negative-path-gap",
+              "state-machine-gap",
+              "lifecycle-gap",
+              "mock-contract-risk",
+              "misclassification",
+              "insufficient-specificity",
+              "unsupported-test",
+              "overbroad-test-scope"
+            ]
+          },
+          "affected_file": {
+            "type": "string",
+            "minLength": 1
+          },
+          "line_start": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "line_end": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0.5,
+            "maximum": 1
+          },
+          "finding": {
+            "type": "string",
+            "minLength": 1
+          },
+          "evidence": {
+            "type": "string",
+            "minLength": 1
+          },
+          "impact": {
+            "type": "string",
+            "minLength": 1
+          },
+          "recommendation": {
+            "type": "string",
+            "minLength": 1
+          },
+          "related_plan_lines": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "file",
+              "line_start",
+              "line_end"
+            ],
+            "properties": {
+              "file": {
+                "type": "string",
+                "minLength": 1
+              },
+              "line_start": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "line_end": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          "related_test_plan_lines": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "file",
+                "line_start",
+                "line_end"
+              ],
+              "properties": {
+                "file": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "line_start": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "line_end": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

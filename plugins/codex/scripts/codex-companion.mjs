@@ -22,6 +22,7 @@ import {
   } from "./lib/codex.mjs";
 import { readStdinIfPiped } from "./lib/fs.mjs";
 import { collectReviewContext, ensureGitRepository, resolveReviewTarget } from "./lib/git.mjs";
+import { addLineNumbers, collectVaultDocumentContext, resolveVaultTaskFolder } from "./lib/vault.mjs";
 import { binaryAvailable, terminateProcessTree } from "./lib/process.mjs";
 import { loadPromptTemplate, interpolateTemplate } from "./lib/prompts.mjs";
 import {
@@ -59,11 +60,15 @@ import {
   renderJobStatusReport,
   renderSetupReport,
   renderStatusReport,
-  renderTaskResult
+  renderTaskResult,
+  renderTestPlanReviewResult,
+  renderDesignReviewResult
 } from "./lib/render.mjs";
 
 const ROOT_DIR = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const REVIEW_SCHEMA = path.join(ROOT_DIR, "schemas", "review-output.schema.json");
+const TEST_PLAN_REVIEW_SCHEMA = path.join(ROOT_DIR, "schemas", "test-plan-review-output.schema.json");
+const DESIGN_REVIEW_SCHEMA = path.join(ROOT_DIR, "schemas", "design-review-output.schema.json");
 const DEFAULT_STATUS_WAIT_TIMEOUT_MS = 240000;
 const DEFAULT_STATUS_POLL_INTERVAL_MS = 2000;
 const VALID_REASONING_EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh"]);
@@ -77,6 +82,8 @@ function printUsage() {
       "  node scripts/codex-companion.mjs setup [--enable-review-gate|--disable-review-gate] [--json]",
       "  node scripts/codex-companion.mjs review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>]",
       "  node scripts/codex-companion.mjs adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [focus text]",
+      "  node scripts/codex-companion.mjs design-review [--wait|--background] [--path <vault-folder>|--task <task-id>] [focus text]",
+      "  node scripts/codex-companion.mjs test-plan-review [--wait|--background] [--path <vault-folder>|--task <task-id>] [focus text]",
       "  node scripts/codex-companion.mjs task [--background] [--write] [--resume-last|--resume|--fresh] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh>] [prompt]",
       "  node scripts/codex-companion.mjs status [job-id] [--all] [--json]",
       "  node scripts/codex-companion.mjs result [job-id] [--json]",
@@ -243,6 +250,29 @@ function buildAdversarialReviewPrompt(context, focusText) {
     USER_FOCUS: focusText || "No extra focus provided.",
     REVIEW_COLLECTION_GUIDANCE: context.collectionGuidance,
     REVIEW_INPUT: context.content
+  });
+}
+
+function buildDesignReviewPrompt(context, focusText) {
+  const template = loadPromptTemplate(ROOT_DIR, "design-review");
+  return interpolateTemplate(template, {
+    TARGET_LABEL: context.target.label,
+    USER_FOCUS: focusText || "No extra focus provided.",
+    PLAN_CONTENT: addLineNumbers(context.planContent || ""),
+    DESIGN_CONTEXT: context.relatedContent || "",
+    PROJECT_CONTEXT: context.projectContext || ""
+  });
+}
+
+function buildTestPlanReviewPrompt(context, focusText) {
+  const template = loadPromptTemplate(ROOT_DIR, "test-plan-review");
+  return interpolateTemplate(template, {
+    TARGET_LABEL: context.target.label,
+    USER_FOCUS: focusText || "No extra focus provided.",
+    TEST_PLAN_CONTENT: context.testPlanContent,
+    DESIGN_CONTEXT: context.designContext || "(no plan.md found)",
+    PLAN_CONTENT: context.designContext || "(no plan.md found)",
+    PROJECT_CONTEXT: context.projectContext || ""
   });
 }
 
@@ -454,6 +484,75 @@ async function executeReviewRun(request) {
   };
 }
 
+async function executeDocumentReviewRun(request) {
+  ensureCodexAvailable(request.cwd);
+
+  const reviewName = request.reviewName;
+  const context = collectVaultDocumentContext(request.vaultFolder, {
+    primaryDoc: request.primaryDoc,
+    includeRelated: request.includeRelated
+  });
+  const focusText = request.focusText?.trim() ?? "";
+
+  const isTestPlanReview = reviewName === "Test Plan Review";
+  const isDesignReview = reviewName === "Design Review";
+  const prompt = isDesignReview
+    ? buildDesignReviewPrompt(context, focusText)
+    : buildTestPlanReviewPrompt(context, focusText);
+
+  const schemaPath = isDesignReview ? DESIGN_REVIEW_SCHEMA : isTestPlanReview ? TEST_PLAN_REVIEW_SCHEMA : REVIEW_SCHEMA;
+  const result = await runAppServerTurn(request.cwd, {
+    prompt,
+    model: request.model,
+    sandbox: "read-only",
+    outputSchema: readOutputSchema(schemaPath),
+    onProgress: request.onProgress
+  });
+
+  const parsed = parseStructuredOutput(result.finalMessage, {
+    status: result.status,
+    failureMessage: result.error?.message ?? result.stderr
+  });
+
+  const payload = {
+    review: reviewName,
+    target: context.target,
+    threadId: result.threadId,
+    context: {
+      vaultFolder: context.vaultFolder,
+      primaryDoc: context.primaryDoc,
+      filesRead: context.filesRead
+    },
+    codex: {
+      status: result.status,
+      stderr: result.stderr,
+      stdout: result.finalMessage,
+      reasoning: result.reasoningSummary
+    },
+    result: parsed.parsed,
+    rawOutput: parsed.rawOutput,
+    parseError: parsed.parseError,
+    reasoningSummary: result.reasoningSummary
+  };
+
+  const renderFn = isDesignReview ? renderDesignReviewResult : isTestPlanReview ? renderTestPlanReviewResult : renderReviewResult;
+  return {
+    exitStatus: result.status,
+    threadId: result.threadId,
+    turnId: result.turnId,
+    payload,
+    rendered: renderFn(parsed, {
+      reviewLabel: reviewName,
+      targetLabel: context.target.label,
+      reasoningSummary: result.reasoningSummary
+    }),
+    summary: parsed.parsed?.summary ?? parsed.parseError ?? firstMeaningfulLine(result.finalMessage, `${reviewName} finished.`),
+    jobTitle: `Codex ${reviewName}`,
+    jobClass: "review",
+    targetLabel: context.target.label
+  };
+}
+
 
 async function executeTaskRun(request) {
   const workspaceRoot = resolveWorkspaceRoot(request.cwd);
@@ -527,8 +626,14 @@ async function executeTaskRun(request) {
 }
 
 function buildReviewJobMetadata(reviewName, target) {
+  const kindMap = {
+    "Review": "review",
+    "Adversarial Review": "adversarial-review",
+    "Design Review": "design-review",
+    "Test Plan Review": "test-plan-review"
+  };
   return {
-    kind: reviewName === "Adversarial Review" ? "adversarial-review" : "review",
+    kind: kindMap[reviewName] ?? "review",
     title: reviewName === "Review" ? "Codex Review" : `Codex ${reviewName}`,
     summary: `${reviewName} ${target.label}`
   };
@@ -555,8 +660,8 @@ function renderQueuedTaskLaunch(payload) {
 }
 
 function getJobKindLabel(kind, jobClass) {
-  if (kind === "adversarial-review") {
-    return "adversarial-review";
+  if (kind === "adversarial-review" || kind === "design-review" || kind === "test-plan-review") {
+    return kind;
   }
   return jobClass === "review" ? "review" : "rescue";
 }
@@ -713,6 +818,62 @@ async function handleReviewCommand(argv, config) {
         cwd,
         base: options.base,
         scope: options.scope,
+        model: options.model,
+        focusText,
+        reviewName: config.reviewName,
+        onProgress: progress
+      }),
+    { json: options.json }
+  );
+}
+
+async function handleDocumentReviewCommand(argv, config) {
+  const { options, positionals } = parseCommandInput(argv, {
+    valueOptions: ["path", "task", "model", "cwd"],
+    booleanOptions: ["json", "background", "wait"],
+    aliasMap: {
+      m: "model",
+      p: "path",
+      t: "task"
+    }
+  });
+
+  const cwd = resolveCommandCwd(options);
+  const workspaceRoot = resolveCommandWorkspace(options);
+  const focusText = positionals.join(" ").trim();
+
+  let vaultFolder;
+  if (options.path) {
+    vaultFolder = path.resolve(cwd, options.path);
+  } else if (options.task) {
+    vaultFolder = resolveVaultTaskFolder(options.task);
+  } else {
+    throw new Error(
+      `Provide --path <vault-folder> or --task <task-id> to specify the document location.`
+    );
+  }
+
+  const folderName = path.basename(vaultFolder);
+  const parentName = path.basename(path.dirname(vaultFolder));
+  const targetLabel = `${config.primaryDoc} in ${parentName}/${folderName}`;
+
+  const job = createCompanionJob({
+    prefix: "review",
+    kind: config.kind,
+    title: `Codex ${config.reviewName}`,
+    workspaceRoot,
+    jobClass: "review",
+    summary: `${config.reviewName} of ${targetLabel}`
+  });
+
+  await runForegroundCommand(
+    job,
+    (progress) =>
+      executeDocumentReviewRun({
+        cwd,
+        vaultFolder,
+        primaryDoc: config.primaryDoc,
+        includeRelated: config.includeRelated,
         model: options.model,
         focusText,
         reviewName: config.reviewName,
@@ -995,6 +1156,22 @@ async function main() {
     case "adversarial-review":
       await handleReviewCommand(argv, {
         reviewName: "Adversarial Review"
+      });
+      break;
+    case "design-review":
+      await handleDocumentReviewCommand(argv, {
+        reviewName: "Design Review",
+        kind: "design-review",
+        primaryDoc: "plan.md",
+        includeRelated: false
+      });
+      break;
+    case "test-plan-review":
+      await handleDocumentReviewCommand(argv, {
+        reviewName: "Test Plan Review",
+        kind: "test-plan-review",
+        primaryDoc: "test-plan.md",
+        includeRelated: true
       });
       break;
     case "task":

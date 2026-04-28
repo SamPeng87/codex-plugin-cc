@@ -285,6 +285,231 @@ export function renderReviewResult(parsedResult, meta) {
   return `${lines.join("\n").trimEnd()}\n`;
 }
 
+function testPlanSeverityRank(severity) {
+  switch (severity) {
+    case "blocker":
+      return 0;
+    case "major":
+      return 1;
+    default:
+      return 2;
+  }
+}
+
+function validateTestPlanReviewShape(data) {
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    return "Expected a top-level JSON object.";
+  }
+  if (typeof data.decision !== "string" || !data.decision.trim()) {
+    return "Missing string `decision`.";
+  }
+  if (typeof data.summary !== "string" || !data.summary.trim()) {
+    return "Missing string `summary`.";
+  }
+  if (!data.stats || typeof data.stats !== "object") {
+    return "Missing object `stats`.";
+  }
+  if (!Array.isArray(data.findings)) {
+    return "Missing array `findings`.";
+  }
+  return null;
+}
+
+export function renderTestPlanReviewResult(parsedResult, meta) {
+  if (!parsedResult.parsed) {
+    const lines = [
+      `# Codex ${meta.reviewLabel}`,
+      "",
+      "Codex did not return valid structured JSON.",
+      "",
+      `- Parse error: ${parsedResult.parseError}`
+    ];
+
+    if (parsedResult.rawOutput) {
+      lines.push("", "Raw final message:", "", "```text", parsedResult.rawOutput, "```");
+    }
+
+    appendReasoningSection(lines, meta.reasoningSummary ?? parsedResult.reasoningSummary);
+
+    return `${lines.join("\n").trimEnd()}\n`;
+  }
+
+  const validationError = validateTestPlanReviewShape(parsedResult.parsed);
+  if (validationError) {
+    const lines = [
+      `# Codex ${meta.reviewLabel}`,
+      "",
+      `Target: ${meta.targetLabel}`,
+      "Codex returned JSON with an unexpected review shape.",
+      "",
+      `- Validation error: ${validationError}`
+    ];
+
+    if (parsedResult.rawOutput) {
+      lines.push("", "Raw final message:", "", "```text", parsedResult.rawOutput, "```");
+    }
+
+    appendReasoningSection(lines, meta.reasoningSummary ?? parsedResult.reasoningSummary);
+
+    return `${lines.join("\n").trimEnd()}\n`;
+  }
+
+  const data = parsedResult.parsed;
+  const findings = [...data.findings].sort(
+    (left, right) => testPlanSeverityRank(left.severity) - testPlanSeverityRank(right.severity)
+  );
+  const lines = [
+    `# Codex ${meta.reviewLabel}`,
+    "",
+    `Target: ${meta.targetLabel}`,
+    `Decision: ${data.decision}`,
+    ""
+  ];
+
+  if (data.stats) {
+    lines.push(
+      "Coverage stats:",
+      `- Extracted from plan: ${data.stats.coverage_items_extracted_from_plan}`,
+      `- Covered: ${data.stats.coverage_items_covered}`,
+      `- Partially covered: ${data.stats.coverage_items_partially_covered}`,
+      `- Uncovered: ${data.stats.coverage_items_uncovered}`,
+      `- Findings: ${data.stats.findings_count}`,
+      ""
+    );
+  }
+
+  lines.push(data.summary, "");
+
+  if (findings.length === 0) {
+    lines.push("No material findings.");
+  } else {
+    lines.push("Findings:");
+    for (const f of findings) {
+      const lineSuffix = f.line_start ? (f.line_end && f.line_end !== f.line_start ? `:${f.line_start}-${f.line_end}` : `:${f.line_start}`) : "";
+      lines.push(`- [${f.severity}] ${f.id}: ${f.finding} (${f.affected_file}${lineSuffix}) [${f.category}]`);
+      if (f.evidence) {
+        lines.push(`  Evidence: ${f.evidence}`);
+      }
+      if (f.impact) {
+        lines.push(`  Impact: ${f.impact}`);
+      }
+      if (f.recommendation) {
+        lines.push(`  Recommendation: ${f.recommendation}`);
+      }
+      if (f.related_plan_lines) {
+        lines.push(`  Plan ref: ${f.related_plan_lines.file}:${f.related_plan_lines.line_start}-${f.related_plan_lines.line_end}`);
+      }
+    }
+  }
+
+  appendReasoningSection(lines, meta.reasoningSummary);
+
+  return `${lines.join("\n").trimEnd()}\n`;
+}
+
+export function renderDesignReviewResult(parsedResult, meta) {
+  if (!parsedResult.parsed) {
+    const lines = [
+      `# Codex ${meta.reviewLabel}`,
+      "",
+      "Codex did not return valid structured JSON.",
+      "",
+      `- Parse error: ${parsedResult.parseError}`
+    ];
+
+    if (parsedResult.rawOutput) {
+      lines.push("", "Raw final message:", "", "```text", parsedResult.rawOutput, "```");
+    }
+
+    appendReasoningSection(lines, meta.reasoningSummary ?? parsedResult.reasoningSummary);
+
+    return `${lines.join("\n").trimEnd()}\n`;
+  }
+
+  const validationError = validateTestPlanReviewShape(parsedResult.parsed);
+  if (validationError) {
+    const lines = [
+      `# Codex ${meta.reviewLabel}`,
+      "",
+      `Target: ${meta.targetLabel}`,
+      "Codex returned JSON with an unexpected review shape.",
+      "",
+      `- Validation error: ${validationError}`
+    ];
+
+    if (parsedResult.rawOutput) {
+      lines.push("", "Raw final message:", "", "```text", parsedResult.rawOutput, "```");
+    }
+
+    appendReasoningSection(lines, meta.reasoningSummary ?? parsedResult.reasoningSummary);
+
+    return `${lines.join("\n").trimEnd()}\n`;
+  }
+
+  const data = parsedResult.parsed;
+  const findings = [...data.findings].sort(
+    (left, right) => testPlanSeverityRank(left.severity) - testPlanSeverityRank(right.severity)
+  );
+  const lines = [
+    `# Codex ${meta.reviewLabel}`,
+    "",
+    `Target: ${meta.targetLabel}`,
+    `Decision: ${data.decision}`,
+    ""
+  ];
+
+  if (data.stats) {
+    lines.push(
+      "Implementation readiness stats:",
+      `- Requirements extracted: ${data.stats.requirements_extracted}`,
+      `- Ready to implement: ${data.stats.requirements_ready_to_implement}`,
+      `- Partially ready: ${data.stats.requirements_partially_ready}`,
+      `- Ambiguous/unimplementable: ${data.stats.requirements_ambiguous_or_unimplementable}`,
+      `- Code touchpoints identified: ${data.stats.code_touchpoints_identified}`,
+      `- Code touchpoints missing/ambiguous: ${data.stats.code_touchpoints_missing_or_ambiguous}`,
+      `- Findings: ${data.stats.findings_count}`,
+      ""
+    );
+  }
+
+  lines.push(data.summary, "");
+
+  if (findings.length === 0) {
+    lines.push("No material findings.");
+  } else {
+    lines.push("Findings:");
+    for (const f of findings) {
+      const lineSuffix = f.line_start ? (f.line_end && f.line_end !== f.line_start ? `:${f.line_start}-${f.line_end}` : `:${f.line_start}`) : "";
+      const inferenceTag = f.is_inference ? " [inference]" : "";
+      lines.push(`- [${f.severity}] ${f.id}: ${f.finding} (${f.affected_file}${lineSuffix}) [${f.category}]${inferenceTag}`);
+      if (f.evidence) {
+        lines.push(`  Evidence: ${f.evidence}`);
+      }
+      if (f.impact) {
+        lines.push(`  Impact: ${f.impact}`);
+      }
+      if (f.recommendation) {
+        lines.push(`  Recommendation: ${f.recommendation}`);
+      }
+      if (f.required_action_type) {
+        lines.push(`  Action: ${f.required_action_type}`);
+      }
+      if (f.auto_check) {
+        const checkLabel = f.auto_check.check_possible ? `${f.auto_check.method}` : "manual";
+        const queries = f.auto_check.queries?.length ? ` → ${f.auto_check.queries.join(", ")}` : "";
+        lines.push(`  Auto-check: ${checkLabel}${queries}`);
+      }
+      if (f.related_plan_lines) {
+        lines.push(`  Plan ref: ${f.related_plan_lines.file}:${f.related_plan_lines.line_start}-${f.related_plan_lines.line_end}`);
+      }
+    }
+  }
+
+  appendReasoningSection(lines, meta.reasoningSummary);
+
+  return `${lines.join("\n").trimEnd()}\n`;
+}
+
 export function renderNativeReviewResult(result, meta) {
   const stdout = result.stdout.trim();
   const stderr = result.stderr.trim();
