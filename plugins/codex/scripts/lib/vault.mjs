@@ -59,6 +59,26 @@ function extractFrontmatter(content) {
   return props;
 }
 
+const DESIGN_DOC_NAMES = ["plan.md", "root-cause.md"];
+
+export function discoverVaultDocPaths(vaultFolder) {
+  if (!fs.existsSync(vaultFolder)) return { designDoc: null, executionPlan: null };
+
+  const designDoc = DESIGN_DOC_NAMES
+    .map((name) => path.join(vaultFolder, name))
+    .find((p) => fs.existsSync(p)) || null;
+
+  let executionPlan = null;
+  const fixPlan = path.join(vaultFolder, "fix-plan.md");
+  if (fs.existsSync(fixPlan)) {
+    executionPlan = fixPlan;
+  } else if (designDoc) {
+    executionPlan = designDoc;
+  }
+
+  return { designDoc, executionPlan };
+}
+
 export function collectVaultDocumentContext(vaultFolder, options = {}) {
   const primaryDocName = options.primaryDoc || "plan.md";
   const includeRelated = options.includeRelated || false;

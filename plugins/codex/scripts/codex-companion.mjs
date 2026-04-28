@@ -22,7 +22,7 @@ import {
   } from "./lib/codex.mjs";
 import { readStdinIfPiped } from "./lib/fs.mjs";
 import { collectReviewContext, ensureGitRepository, resolveReviewTarget } from "./lib/git.mjs";
-import { addLineNumbers, collectVaultDocumentContext, resolveVaultTaskFolder } from "./lib/vault.mjs";
+import { addLineNumbers, collectVaultDocumentContext, discoverVaultDocPaths, resolveVaultTaskFolder } from "./lib/vault.mjs";
 import { binaryAvailable, terminateProcessTree } from "./lib/process.mjs";
 import { loadPromptTemplate, interpolateTemplate } from "./lib/prompts.mjs";
 import {
@@ -84,6 +84,9 @@ function printUsage() {
       "  node scripts/codex-companion.mjs adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [focus text]",
       "  node scripts/codex-companion.mjs design-review [--wait|--background] [--path <vault-folder>|--task <task-id>] [focus text]",
       "  node scripts/codex-companion.mjs test-plan-review [--wait|--background] [--path <vault-folder>|--task <task-id>] [focus text]",
+      "  node scripts/codex-companion.mjs execute --context-file <path> [--phase implement|write-tests|fix-tests] [--model <model>] [--write] [--background]",
+      "  node scripts/codex-companion.mjs execute-test --context-file <path> [--model <model>] [--write] [--background]",
+      "  node scripts/codex-companion.mjs execute-fix --context-file <path> [--model <model>] [--write] [--background]",
       "  node scripts/codex-companion.mjs task [--background] [--write] [--resume-last|--resume|--fresh] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh>] [prompt]",
       "  node scripts/codex-companion.mjs status [job-id] [--all] [--json]",
       "  node scripts/codex-companion.mjs result [job-id] [--json]",
@@ -273,6 +276,128 @@ function buildTestPlanReviewPrompt(context, focusText) {
     DESIGN_CONTEXT: context.designContext || "(no plan.md found)",
     PLAN_CONTENT: context.designContext || "(no plan.md found)",
     PROJECT_CONTEXT: context.projectContext || ""
+  });
+}
+
+function readContextFile(cwd, contextFilePath) {
+  const resolved = path.resolve(cwd, contextFilePath);
+  if (!fs.existsSync(resolved)) {
+    throw new Error(`Context file not found: ${resolved}`);
+  }
+  return JSON.parse(fs.readFileSync(resolved, "utf8"));
+}
+
+function buildExecutePrompt(context) {
+  const template = loadPromptTemplate(ROOT_DIR, "execute");
+
+  const trackerMetadata = context.mode === "1" && context.tracker
+    ? `Priority/Status/Assignee: ${context.tracker.priority || "n/a"}/${context.tracker.status || "n/a"}/${context.tracker.assignee || "n/a"}\n`
+    : "";
+
+  let description;
+  if (context.mode === "3") {
+    description = context.description || context.summary || "";
+  } else if (context.mode === "1" && context.tracker?.description) {
+    description = context.tracker.description;
+  } else {
+    description = "详见设计稿和执行计划稿";
+  }
+
+  const trackerParts = [];
+  if (context.mode === "1" && context.tracker) {
+    if (context.tracker.comments) {
+      trackerParts.push(`\nRelated comments:\n${context.tracker.comments}`);
+    }
+    if (context.tracker.linkedIssues) {
+      trackerParts.push(`\nLinked issues:\n${context.tracker.linkedIssues}`);
+    }
+    if (context.tracker.screenshots) {
+      trackerParts.push(`\nScreenshots:\n${context.tracker.screenshots}`);
+    }
+  }
+
+  let designDocPath = context.designDocPath || null;
+  let executionPlanPath = context.executionPlanPath || null;
+  if (!designDocPath && context.vaultFolder) {
+    const docs = discoverVaultDocPaths(context.vaultFolder);
+    designDocPath = docs.designDoc;
+    executionPlanPath = executionPlanPath || docs.executionPlan;
+  }
+
+  const designDocSection = designDocPath
+    ? `\nDesign document: ${designDocPath} (read this file yourself with the Read tool)\n`
+    : "";
+
+  const executionPlanSection = executionPlanPath
+    ? `\nExecution plan: ${executionPlanPath} (read this file yourself with the Read tool)\n`
+    : "";
+
+  const executionDirective = context.mode === "3"
+    ? "Implement strictly according to the description above."
+    : "Implement strictly according to the execution plan document.";
+
+  const extraGuidanceSection = context.extraGuidance
+    ? `\n<extra_guidance>\n${context.extraGuidance}\n</extra_guidance>\n`
+    : "";
+
+  return interpolateTemplate(template, {
+    TASK_ID: context.taskId || "n/a (direct prompt mode)",
+    MODE: `Mode ${context.mode}`,
+    SUMMARY: context.summary || "",
+    TRACKER_METADATA: trackerMetadata,
+    SOURCE: context.source || "direct prompt",
+    DESCRIPTION: description,
+    TRACKER_CONTEXT: trackerParts.join("\n"),
+    DESIGN_DOC_SECTION: designDocSection,
+    EXECUTION_PLAN_SECTION: executionPlanSection,
+    EXECUTION_DIRECTIVE: executionDirective,
+    REPO_PATH: context.repoPath || process.cwd(),
+    EXTRA_GUIDANCE_SECTION: extraGuidanceSection
+  });
+}
+
+
+function buildExecuteTestPrompt(context) {
+  const template = loadPromptTemplate(ROOT_DIR, "execute-test");
+
+  const implFileLines = (context.implFiles || []).map((f) => `  - ${f}`).join("\n");
+
+  let testPlanPath = context.testPlanPath || null;
+  if (!testPlanPath && context.vaultFolder) {
+    const candidate = path.join(context.vaultFolder, "test-plan.md");
+    if (fs.existsSync(candidate)) testPlanPath = candidate;
+  }
+
+  let designDocPath = context.designDocPath || null;
+  if (!designDocPath && context.vaultFolder) {
+    const docs = discoverVaultDocPaths(context.vaultFolder);
+    designDocPath = docs.designDoc;
+  }
+  const designDocSection = designDocPath
+    ? `Design document (source of truth for intended behavior): ${designDocPath} (read this file yourself with the Read tool)`
+    : "";
+
+  const testCodeSkillSection = "\nFollow the common-skills:test-code skill standards when writing tests.\n";
+
+  return interpolateTemplate(template, {
+    TEST_PLAN_PATH: testPlanPath || "",
+    DESIGN_DOC_SECTION: designDocSection,
+    IMPL_FILES_LIST: implFileLines,
+    REPO_PATH: context.repoPath || process.cwd(),
+    TEST_CODE_SKILL_SECTION: testCodeSkillSection
+  });
+}
+
+function buildExecuteFixPrompt(context) {
+  const template = loadPromptTemplate(ROOT_DIR, "execute-fix");
+
+  const testFileLines = (context.testFiles || []).map((f) => `  - ${f}`).join("\n");
+  const implFileLines = (context.implFiles || []).map((f) => `  - ${f}`).join("\n");
+
+  return interpolateTemplate(template, {
+    TEST_FILES_LIST: testFileLines,
+    IMPL_FILES_LIST: implFileLines,
+    REPO_PATH: context.repoPath || process.cwd()
   });
 }
 
@@ -663,6 +788,9 @@ function getJobKindLabel(kind, jobClass) {
   if (kind === "adversarial-review" || kind === "design-review" || kind === "test-plan-review") {
     return kind;
   }
+  if (kind === "task" && jobClass === "task") {
+    return "rescue";
+  }
   return jobClass === "review" ? "review" : "rescue";
 }
 
@@ -877,6 +1005,99 @@ async function handleDocumentReviewCommand(argv, config) {
         model: options.model,
         focusText,
         reviewName: config.reviewName,
+        onProgress: progress
+      }),
+    { json: options.json }
+  );
+}
+
+async function handleExecute(argv) {
+  const { options, positionals } = parseCommandInput(argv, {
+    valueOptions: ["context-file", "model", "effort", "cwd", "phase", "path", "task"],
+    booleanOptions: ["json", "write", "resume-last", "resume", "fresh", "background"],
+    aliasMap: {
+      m: "model",
+      f: "context-file",
+      p: "phase",
+      t: "task"
+    }
+  });
+
+  const cwd = resolveCommandCwd(options);
+  const workspaceRoot = resolveCommandWorkspace(options);
+  const model = normalizeRequestedModel(options.model);
+  const effort = normalizeReasoningEffort(options.effort);
+  const write = options.write !== false;
+  const resumeLast = Boolean(options["resume-last"] || options.resume);
+  const fresh = Boolean(options.fresh);
+  if (resumeLast && fresh) {
+    throw new Error("Choose either --resume/--resume-last or --fresh.");
+  }
+
+  const contextFilePath = options["context-file"];
+  let prompt;
+  let phaseLabel;
+
+  if (resumeLast && !contextFilePath) {
+    prompt = positionals.join(" ") || readStdinIfPiped() || null;
+    phaseLabel = "Resume";
+  } else {
+    if (!contextFilePath) {
+      throw new Error("--context-file is required for initial execution. Use --resume-last for continuation.");
+    }
+    const context = readContextFile(cwd, contextFilePath);
+
+    if (options.task && !context.vaultFolder) {
+      context.vaultFolder = resolveVaultTaskFolder(options.task);
+    } else if (options.path && !context.vaultFolder) {
+      context.vaultFolder = path.resolve(cwd, options.path);
+    }
+
+    const phase = options.phase || "implement";
+    switch (phase) {
+      case "implement":
+        prompt = buildExecutePrompt(context);
+        phaseLabel = "Implement";
+        break;
+      case "write-tests":
+        prompt = buildExecuteTestPrompt(context);
+        phaseLabel = "Write Tests";
+        break;
+      case "fix-tests":
+        prompt = buildExecuteFixPrompt(context);
+        phaseLabel = "Fix Tests";
+        break;
+      default:
+        throw new Error(`Unknown phase: ${phase}. Use implement, write-tests, or fix-tests.`);
+    }
+  }
+
+  const taskMetadata = {
+    title: `Codex Execute (${phaseLabel})`,
+    summary: shorten(prompt || phaseLabel)
+  };
+
+  if (options.background) {
+    ensureCodexAvailable(cwd);
+    const job = buildTaskJob(workspaceRoot, taskMetadata, write);
+    const request = buildTaskRequest({ cwd, model, effort, prompt, write, resumeLast, jobId: job.id });
+    const { payload } = enqueueBackgroundTask(cwd, job, request);
+    outputCommandResult(payload, renderQueuedTaskLaunch(payload), options.json);
+    return;
+  }
+
+  const job = buildTaskJob(workspaceRoot, taskMetadata, write);
+  await runForegroundCommand(
+    job,
+    (progress) =>
+      executeTaskRun({
+        cwd,
+        model,
+        effort,
+        prompt,
+        write,
+        resumeLast,
+        jobId: job.id,
         onProgress: progress
       }),
     { json: options.json }
@@ -1173,6 +1394,15 @@ async function main() {
         primaryDoc: "test-plan.md",
         includeRelated: true
       });
+      break;
+    case "execute":
+      await handleExecute(["--phase", "implement", ...argv]);
+      break;
+    case "execute-test":
+      await handleExecute(["--phase", "write-tests", ...argv]);
+      break;
+    case "execute-fix":
+      await handleExecute(["--phase", "fix-tests", ...argv]);
       break;
     case "task":
       await handleTask(argv);

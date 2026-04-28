@@ -119,6 +119,17 @@ Prioritize weaknesses that lead to false confidence:
 
 - out-of-scope tests:
   Flag tests in test-plan.md that assert behavior not present in plan.md, especially if they would waste effort or encode unsupported product assumptions.
+
+- test validity:
+  Each test case must verify observable behavior, not merely assert that a property exists, a type is correct, or a value is non-null.
+  A valid test exercises an action and asserts an outcome that would change if the feature behavior were broken.
+  Flag tests that only check structural properties (field existence, type shape, non-nullity) without exercising any behavior as "unsupported-test" or "insufficient-specificity".
+  Pure property assertions that duplicate what the type system or linter already guarantees are invalid tests.
+
+- acceptance criteria automatability:
+  For each plan.md acceptance criterion mapped to test-plan.md coverage, verify that the test case can be executed automatically by a test-writing agent without human visual inspection, subjective judgment, or manual walkthrough.
+  Flag acceptance criteria whose corresponding tests require human confirmation with no programmatic equivalent.
+  Flag acceptance criteria that use subjective language ("looks good", "feels right", "is intuitive") without a measurable proxy that an automated test can assert.
 </test_plan_review_focus>
 
 <review_method>

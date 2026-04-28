@@ -112,12 +112,44 @@ test("test-plan-review command spawns document-reviewer subagent while staying r
   assert.match(agent, /model:\s*sonnet/);
 });
 
+test("execute commands spawn code-executor subagent as independent commands", () => {
+  const execute = read("commands/execute.md");
+  const executeTest = read("commands/execute-test.md");
+  const executeFix = read("commands/execute-fix.md");
+  const agent = read("agents/code-executor.md");
+
+  for (const [source, name] of [[execute, "execute"], [executeTest, "execute-test"], [executeFix, "execute-fix"]]) {
+    assert.match(source, /Agent/, `${name} uses Agent tool`);
+    assert.match(source, /subagent_type: "codex:code-executor"/, `${name} uses code-executor agent`);
+    assert.match(source, /--context-file/, `${name} accepts --context-file`);
+    assert.match(source, /--resume-last\|--fresh/, `${name} supports resume`);
+    assert.match(source, /output verbatim/i, `${name} returns verbatim output`);
+    assert.match(source, /codex-companion\.mjs/, `${name} calls companion script`);
+  }
+
+  assert.match(execute, /companion\.mjs" execute/);
+  assert.match(executeTest, /companion\.mjs" execute-test/);
+  assert.match(executeFix, /companion\.mjs" execute-fix/);
+
+  assert.match(execute, /`Skill\(codex:execute\)`.*re-enters/i);
+  assert.match(executeTest, /`Skill\(codex:execute-test\)`.*re-enters/i);
+  assert.match(executeFix, /`Skill\(codex:execute-fix\)`.*re-enters/i);
+
+  assert.match(agent, /thin forwarding wrapper/i);
+  assert.match(agent, /model:\s*sonnet/);
+  assert.match(agent, /Do not inspect the repository/i);
+  assert.match(agent, /Return the stdout.*exactly as-is/i);
+});
+
 test("continue is not exposed as a user-facing command", () => {
   const commandFiles = fs.readdirSync(path.join(PLUGIN_ROOT, "commands")).sort();
   assert.deepEqual(commandFiles, [
     "adversarial-review.md",
     "cancel.md",
     "design-review.md",
+    "execute-fix.md",
+    "execute-test.md",
+    "execute.md",
     "rescue.md",
     "result.md",
     "review.md",

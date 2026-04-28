@@ -411,6 +411,19 @@ Do not require:
 
 unless plan.md explicitly requires them for this local feature.
 
+Pass 5b: Acceptance criteria automatability
+
+For each acceptance criterion or completion condition in plan.md, check whether it can be verified automatically by a coding agent (via test assertion, snapshot comparison, type check, or lint rule) without requiring human visual inspection, subjective judgment, or manual walkthrough.
+
+Flag acceptance criteria that:
+- require human visual confirmation with no programmatic equivalent
+- use subjective language ("looks good", "feels right", "is intuitive") without a measurable proxy
+- describe behavior that no automated test, lint rule, or static check could verify
+- define completion in terms that only a human reviewer could evaluate
+
+Use category "insufficient-specificity" or "behavior-gap" with required_action_type "add-implementation-detail" or "clarify-design".
+The author must either make the AC programmatically verifiable or explicitly mark it as manual-only with justification.
+
 Pass 6: Prioritize findings
 
 Report only material findings.
