@@ -1,3 +1,5 @@
+Think step by step.
+
 <task>
 Run all tests (unit, contract, behavioral) and make them pass.
 
@@ -29,4 +31,6 @@ Before fixing implementation code:
 Do not modify test files.
 Do not execute git commit or git push.
 Do not add transparent fallbacks, graceful degradation, or backwards-compatibility shims to make tests pass. Fix the actual logic.
+Do not null-check or empty-check values that cannot be null/empty by type or contract. Useless defensive checks hide upstream bugs.
+Do not swallow exceptions in catch blocks. Let errors propagate or fail explicitly.
 </action_safety>

@@ -1,3 +1,5 @@
+Think step by step.
+
 <task>
 You are a senior test automation engineer.
 
