@@ -24,7 +24,8 @@ Prioritize the kinds of failures that are expensive, dangerous, or hard to detec
 - data loss, corruption, duplication, and irreversible state changes
 - rollback safety, retries, partial failure, and idempotency gaps
 - race conditions, ordering assumptions, stale state, and re-entrancy
-- empty-state, null, timeout, and degraded dependency behavior
+- empty-state, null, timeout, and degraded dependency behavior — also flag unnecessary defensive empty-state checks that add no real protection and obscure logic
+- swallowed exceptions (catch-and-ignore, catch-and-return-default, catch-and-log-only) that hide failures and make production debugging harder
 - version skew, schema drift, migration hazards, and compatibility regressions
 - observability gaps that would hide failure or make recovery harder
 </attack_surface>
