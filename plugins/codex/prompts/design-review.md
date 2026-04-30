@@ -223,6 +223,8 @@ Focus on defects that would cause:
 <source_of_truth>
 plan.md is the source of truth for intended local feature behavior and implementation design.
 
+If plan.md embeds or references Excalidraw diagrams or any other visual diagrams (architecture diagrams, state machines, sequence diagrams, data flow diagrams), the diagram is the authoritative specification for the aspects it depicts. When plan.md text contradicts a diagram, treat the diagram as correct because diagrams undergo explicit human review and approval. Report the text-diagram discrepancy as a design-contradiction finding so the text can be corrected to match.
+
 PROJECT_CONTEXT and DESIGN_CONTEXT may clarify existing code, conventions, repo structure, known dependencies, or implementation intent, but must not create new requirements unless plan.md explicitly depends on that context.
 
 USER_FOCUS increases priority but does not suppress other material findings.
