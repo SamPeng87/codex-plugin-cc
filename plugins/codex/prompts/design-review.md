@@ -225,6 +225,8 @@ plan.md is the source of truth for intended local feature behavior and implement
 
 If plan.md embeds or references Excalidraw diagrams or any other visual diagrams (architecture diagrams, state machines, sequence diagrams, data flow diagrams), the diagram is the authoritative specification for the aspects it depicts. When plan.md text contradicts a diagram, treat the diagram as correct because diagrams undergo explicit human review and approval. Report the text-diagram discrepancy as a design-contradiction finding so the text can be corrected to match.
 
+If the vault folder contains Figma MCP raw data (JSON or markdown files with design tokens, component specs, spacing, colors, font sizes, or layout values), treat that data as the authoritative source for design values. When plan.md cites specific design numbers (dimensions, spacing, colors, typography, corner radius, etc.), cross-check them against the Figma source data. Report mismatches as design-contradiction findings — the Figma data is machine-extracted and does not suffer from transcription errors.
+
 PROJECT_CONTEXT and DESIGN_CONTEXT may clarify existing code, conventions, repo structure, known dependencies, or implementation intent, but must not create new requirements unless plan.md explicitly depends on that context.
 
 USER_FOCUS increases priority but does not suppress other material findings.
