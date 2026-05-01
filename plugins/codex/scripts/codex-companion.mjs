@@ -318,10 +318,12 @@ function buildExecutePrompt(context) {
 
   let designDocPath = context.designDocPath || null;
   let executionPlanPath = context.executionPlanPath || null;
+  let figmaContextPath = context.figmaContextPath || null;
   if (!designDocPath && context.vaultFolder) {
     const docs = discoverVaultDocPaths(context.vaultFolder);
     designDocPath = docs.designDoc;
     executionPlanPath = executionPlanPath || docs.executionPlan;
+    figmaContextPath = figmaContextPath || docs.figmaContext;
   }
 
   const designDocSection = designDocPath
@@ -330,6 +332,10 @@ function buildExecutePrompt(context) {
 
   const executionPlanSection = executionPlanPath
     ? `\nExecution plan: ${executionPlanPath} (read this file yourself with the Read tool)\n`
+    : "";
+
+  const figmaSection = figmaContextPath
+    ? `\nFigma design data: ${figmaContextPath} (read this file yourself with the Read tool)\nFollow the common-skills:figma-execute skill standards for UI implementation based on this Figma context.\n`
     : "";
 
   const executionDirective = context.mode === "3"
@@ -350,6 +356,7 @@ function buildExecutePrompt(context) {
     TRACKER_CONTEXT: trackerParts.join("\n"),
     DESIGN_DOC_SECTION: designDocSection,
     EXECUTION_PLAN_SECTION: executionPlanSection,
+    FIGMA_SECTION: figmaSection,
     EXECUTION_DIRECTIVE: executionDirective,
     REPO_PATH: context.repoPath || process.cwd(),
     EXTRA_GUIDANCE_SECTION: extraGuidanceSection

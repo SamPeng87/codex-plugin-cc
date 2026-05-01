@@ -3,7 +3,7 @@ import path from "node:path";
 import os from "node:os";
 
 const DEFAULT_VAULT_BASE = path.join(os.homedir(), "obsidian", "sam");
-const KNOWN_DOC_FILES = ["plan.md", "test-plan.md", "root-cause.md", "fix-plan.md", "insight.md"];
+const KNOWN_DOC_FILES = ["plan.md", "test-plan.md", "root-cause.md", "fix-plan.md", "insight.md", "figma-context.md"];
 
 export function resolveVaultTaskFolder(taskId) {
   const projectsDir = path.join(DEFAULT_VAULT_BASE, "projects");
@@ -62,7 +62,7 @@ function extractFrontmatter(content) {
 const DESIGN_DOC_NAMES = ["plan.md", "root-cause.md"];
 
 export function discoverVaultDocPaths(vaultFolder) {
-  if (!fs.existsSync(vaultFolder)) return { designDoc: null, executionPlan: null };
+  if (!fs.existsSync(vaultFolder)) return { designDoc: null, executionPlan: null, figmaContext: null };
 
   const designDoc = DESIGN_DOC_NAMES
     .map((name) => path.join(vaultFolder, name))
@@ -76,7 +76,10 @@ export function discoverVaultDocPaths(vaultFolder) {
     executionPlan = designDoc;
   }
 
-  return { designDoc, executionPlan };
+  const figmaCandidate = path.join(vaultFolder, "figma-context.md");
+  const figmaContext = fs.existsSync(figmaCandidate) ? figmaCandidate : null;
+
+  return { designDoc, executionPlan, figmaContext };
 }
 
 export function collectVaultDocumentContext(vaultFolder, options = {}) {

@@ -227,6 +227,8 @@ If plan.md embeds or references Excalidraw diagrams or any other visual diagrams
 
 If the vault folder contains Figma MCP raw data (JSON or markdown files with design tokens, component specs, spacing, colors, font sizes, or layout values), treat that data as the authoritative source for design values. When plan.md cites specific design numbers (dimensions, spacing, colors, typography, corner radius, etc.), cross-check them against the Figma source data. Report mismatches as design-contradiction findings — the Figma data is machine-extracted and does not suffer from transcription errors.
 
+If figma-context.md or plan.md references a Figma screenshot (typically `![[attachments/figma-screenshot.png]]`), use the Read tool to open that image file. Visually verify that plan.md's UI layout descriptions, component placement, and visual hierarchy are consistent with what the screenshot shows. Report discrepancies as design-contradiction findings — the screenshot is the visual ground truth for intended UI appearance.
+
 PROJECT_CONTEXT and DESIGN_CONTEXT may clarify existing code, conventions, repo structure, known dependencies, or implementation intent, but must not create new requirements unless plan.md explicitly depends on that context.
 
 USER_FOCUS increases priority but does not suppress other material findings.

@@ -28,6 +28,7 @@ Prioritize the kinds of failures that are expensive, dangerous, or hard to detec
 - swallowed exceptions (catch-and-ignore, catch-and-return-default, catch-and-log-only) that hide failures and make production debugging harder
 - version skew, schema drift, migration hazards, and compatibility regressions
 - observability gaps that would hide failure or make recovery harder
+- Figma visual fidelity: if the review context references a Figma screenshot or figma-context.md in a vault folder, use the Read tool to open the screenshot and check whether the code changes produce UI that matches the design — flag layout, spacing, color, or typography mismatches
 </attack_surface>
 
 <review_method>
