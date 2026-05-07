@@ -80,6 +80,30 @@ Stop context gathering once you can name:
 - the command to compile or run the new test
 </context_gathering_policy>
 
+<unit_test_refactoring>
+Before writing new test cases, read the `## 单元测试重构` section of test-plan.md. If it contains actionable items, handle them first:
+
+Priority handling:
+- `must-fix`: Do these before writing any new tests. Shared fakes with stale behavior, outdated assertions, or defunct tests will undermine new test reliability.
+- `should-fix`: Do these alongside new test writing. Extracting duplicate setup to shared testutil, renaming stale test classes, adjusting test granularity — natural to handle when you're already touching the test files.
+- `nice-to-have`: Handle only if the affected file is already open for new tests. Do not make extra passes.
+
+Typical refactoring operations:
+- Rename test classes/methods to match current production class names
+- Extract duplicated setup/fake logic into shared testutil
+- Update hardcoded assertion values (old constants, old enums, old data structures) to match current implementation
+- Adjust test granularity: replace mock-heavy unit tests with fake-based behavior tests, or demote integration tests that only test pure logic to unit tests
+- Delete tests whose production target was removed or completely rewritten
+
+Rules:
+- Refactoring existing tests is allowed and expected. This is the one exception to "only write new tests".
+- Do not delete a test unless the production code it targets no longer exists or has been completely rewritten with a fundamentally different contract.
+- When extracting shared testutil, place it in the project's existing testutil/fakes/fixtures directory structure.
+- Report all refactoring actions in the final output under a "Test refactoring" section.
+
+If the section says "已有测试无重构需求", skip this step entirely.
+</unit_test_refactoring>
+
 <test_selection_and_skip_policy>
 Implement a pending case only if all of the following are true:
 - The expected behavior is supported by test-plan.md and does not contradict the design/plan document.
@@ -211,4 +235,10 @@ When finished, return a concise final report with these sections:
    - expected behavior
    - observed behavior
    - why production code was not changed
+
+6. Test refactoring performed (from `## 单元测试重构` section)
+   - action: renamed / extracted / deleted / updated assertions / adjusted granularity
+   - file path
+   - reason
+   - If no refactoring was needed, state "No test refactoring required"
 </structured_output_contract>
