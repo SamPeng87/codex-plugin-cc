@@ -60,7 +60,7 @@ Do not stop for cosmetic uncertainty.
 If the repository is under git, inspect the working tree before editing.
 Do not overwrite, revert, reformat, or clean up unrelated existing user changes.
 Do not run git commit, git push, git reset, git clean, git checkout, or equivalent destructive commands.
-Do not install dependencies, modify lockfiles, make network calls, or run release/package/publish commands unless the plan explicitly requires it.
+Do not install dependencies or modify lockfiles. Network access is limited to read-only lookups of current official documentation or API references for dependencies used by the plan. Do not run release/package/publish commands unless the plan explicitly requires it.
 </working_tree_safety>
 
 <pre_coding_preparation>
@@ -68,7 +68,16 @@ Before writing any code:
 1. Follow the common-skills:review-checklist skill standards. The review agent will audit against the same checklist.
 2. Find relevant lint/style configuration files near the repository root or changed modules, such as detekt.yml, .eslintrc, eslint.config.*, biome.json, rustfmt.toml, pyproject.toml, ruff.toml, gofmt/go.mod, ktlint config, Gradle/Maven config, or equivalents. Do not scan vendor, node_modules, build, dist, target, .git, or generated artifact directories unless the plan explicitly targets them.
 3. Locate existing unit/integration tests for the modules you are about to change. Read the relevant tests before editing production code.
-4. Create an internal implementation ledger mapping:
+4. For every third-party API used by the plan, establish the required contract in this exact inspection order:
+   - existing production usages and analogous implementations in this repository
+   - the approved plan's recorded API use and evidence
+   - current official documentation or API reference for the dependency version
+   - local source or type declarations
+   - only for a private undocumented dependency, targeted inspection of the exact artifact, class, and method
+
+   Stop when the current feature's contract is established with cited evidence. The plan defines intended use; version-matched documentation and declarations establish factual library behavior. If these sources conflict, stop and report the conflict. Never bulk unpack or decompile JAR/AAR files, dependency caches, or unrelated packages. If repository usage and a sourced plan contract agree, do not restart broad reverse engineering.
+5. For every algorithm, parser, mapper, cache policy, adapter, normalization, or transformation to be added, search for semantically equivalent behavior and data flow, not only matching names. Identify the existing semantic owner and real callers. Reuse or extend that owner; if none exists, designate one owner. Do not copy the same semantic operation into another module. Limit any new abstraction to the current plan, acceptance criteria, and verified callers; hypothetical future callers are not justification.
+6. Create an internal implementation ledger mapping:
    - plan item or acceptance criterion
    - target file(s)
    - intended code change
@@ -90,6 +99,7 @@ Do not modify the plan document. Only verify and report.
 <implementation_quality_contract>
 Write code as a senior engineer would for this repository:
 - Prefer existing project patterns, APIs, abstractions, naming, and file organization.
+- Keep one implementation owner for each semantic operation; adapters and callers delegate to it instead of duplicating the algorithm.
 - Make the smallest coherent change that satisfies the plan and AC.
 - Do not add new dependencies, public APIs, configuration systems, abstraction layers, generic frameworks, compatibility shims, or speculative extension points unless the plan explicitly requires them.
 - Do not perform unrelated refactors, broad formatting changes, cleanup, or style rewrites.

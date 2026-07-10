@@ -39,6 +39,26 @@ If the user supplied a focus area, weight it heavily, but still report any other
 {{REVIEW_COLLECTION_GUIDANCE}}
 </review_method>
 
+<evidence_gate>
+Code existing in a file does not prove that production can execute it. For every runtime or behavioral finding, inspect enough repository context to prove this complete path:
+
+`production entrypoint -> concrete trigger and data/state source -> actual call chain or framework wiring -> defect sink -> observable consequence`
+
+The finding body must include a `Path evidence:` statement naming each hop and its file, symbol, registration, configuration, or contract evidence. Do not assume an unobserved caller, input, null, configuration, dependency-injection binding, event subscription, or concurrent schedule. Test-only code, dead code, and unregistered branches do not establish production reachability.
+
+If any hop is unproven, continue targeted investigation. If it remains unproven, discard the finding. Do not downgrade an unproven path to low severity, low confidence, or a generic risk.
+
+Compile/lint/test failures actually observed, structural duplicate-implementation findings, and plan/declared-contract violations that change observable behavior, a boundary, a public/cross-module/third-party contract, compatibility, or semantic ownership use direct evidence instead of a production path. Internal file, helper, signature, or code-shape differences from a plan are not direct defects when they preserve those outcomes. A public/exported symbol alone is not evidence of an external consumer.
+</evidence_gate>
+
+<semantic_ownership_gate>
+Search new algorithms, parsers, mappings, transformations, normalization, caching, and adapters by behavior and data flow, not only by symbol name.
+
+A duplicate-implementation finding must cite at least two concrete file/symbol locations and show that they implement the same input/output semantics, state transition, or invariant. Identify which existing location should remain the single semantic owner and why the other can delegate to or extend it. Textual similarity alone is insufficient.
+
+An over-generalization finding must cite the specific extra type, API, branch, configuration surface, or abstraction and prove from the plan plus current callers that it has no current requirement or consumer. Do not demand an abstraction for hypothetical future reuse, and do not report a local implementation merely because it could be generalized.
+</semantic_ownership_gate>
+
 <finding_bar>
 Report only material findings.
 Do not include style feedback, naming feedback, low-value cleanup, or speculative concerns without evidence.
@@ -66,7 +86,7 @@ Write the summary like a terse ship/no-ship assessment, not a neutral recap.
 Be aggressive, but stay grounded.
 Every finding must be defensible from the provided repository context or tool outputs.
 Do not invent files, lines, code paths, incidents, attack chains, or runtime behavior you cannot support.
-If a conclusion depends on an inference, state that explicitly in the finding body and keep the confidence honest.
+Reachability may not depend on inference. Once a path or direct defect is proven, an inference about likelihood or impact must be labeled explicitly in the finding body and reflected in confidence.
 </grounding_rules>
 
 <calibration_rules>
@@ -79,7 +99,7 @@ If the change looks safe, say so directly and return no findings.
 Before finalizing, check that each finding is:
 - adversarial rather than stylistic
 - tied to a concrete code location
-- plausible under a real failure scenario
+- proven reachable through a real production path or directly demonstrated by concrete static/tool evidence
 - actionable for an engineer fixing the issue
 </final_check>
 
