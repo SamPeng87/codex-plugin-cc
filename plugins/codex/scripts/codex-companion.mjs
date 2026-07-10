@@ -73,6 +73,7 @@ const TEST_PLAN_REVIEW_SCHEMA = path.join(ROOT_DIR, "schemas", "test-plan-review
 const DESIGN_REVIEW_SCHEMA = path.join(ROOT_DIR, "schemas", "design-review-output.schema.json");
 const DEFAULT_STATUS_WAIT_TIMEOUT_MS = 240000;
 const DEFAULT_STATUS_POLL_INTERVAL_MS = 2000;
+const DEFAULT_AWAIT_RESULT_TIMEOUT_MS = 2760000;
 const VALID_REASONING_EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max"]);
 const MODEL_ALIASES = new Map([["spark", "gpt-5.3-codex-spark"]]);
 const STOP_REVIEW_TASK_MARKER = "Run a stop-gate review of the previous Claude turn.";
@@ -92,6 +93,7 @@ function printUsage() {
       "  node scripts/codex-companion.mjs task [--background|--wait] [--write] [--resume-last|--resume|--fresh] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh|max>] [prompt]",
       "  node scripts/codex-companion.mjs transfer [--source <claude-jsonl>] [--json]",
       "  node scripts/codex-companion.mjs status [job-id] [--all] [--json]",
+      "  node scripts/codex-companion.mjs await-result <job-id> [--timeout-ms <ms>] [--json|--jsonl]",
       "  node scripts/codex-companion.mjs result [job-id] [--json]",
       "  node scripts/codex-companion.mjs cancel [job-id] [--json]"
     ].join("\n")
@@ -1399,6 +1401,56 @@ async function handleStatus(argv) {
   outputResult(renderStatusPayload(report, options.json), options.json);
 }
 
+async function handleAwaitResult(argv) {
+  const { options, positionals } = parseCommandInput(argv, {
+    valueOptions: ["cwd", "timeout-ms", "poll-interval-ms"],
+    booleanOptions: ["json", "jsonl"]
+  });
+
+  if (options.json && options.jsonl) {
+    throw new Error("Choose either --json or --jsonl.");
+  }
+
+  const outputAwaitResult = (payload, rendered) => {
+    if (options.jsonl) {
+      console.log(JSON.stringify(payload));
+      return;
+    }
+    outputCommandResult(payload, rendered, options.json);
+  };
+
+  const cwd = resolveCommandCwd(options);
+  const reference = positionals[0] ?? "";
+  if (!reference) {
+    throw new Error("`await-result` requires a job id.");
+  }
+
+  const snapshot = await waitForSingleJobSnapshot(cwd, reference, {
+    timeoutMs: options["timeout-ms"] ?? DEFAULT_AWAIT_RESULT_TIMEOUT_MS,
+    pollIntervalMs: options["poll-interval-ms"]
+  });
+
+  if (snapshot.waitTimedOut) {
+    const payload = {
+      ...snapshot,
+      error: `Timed out waiting for ${snapshot.job.id} to finish.`
+    };
+    outputAwaitResult(payload, renderJobStatusReport(snapshot.job));
+    process.exitCode = 2;
+    return;
+  }
+
+  const storedJob = readStoredJob(snapshot.workspaceRoot, snapshot.job.id);
+  const payload = {
+    job: snapshot.job,
+    storedJob
+  };
+  outputAwaitResult(payload, renderStoredJobResult(snapshot.job, storedJob));
+  if (snapshot.job.status !== "completed") {
+    process.exitCode = 1;
+  }
+}
+
 function handleResult(argv) {
   const { options, positionals } = parseCommandInput(argv, {
     valueOptions: ["cwd"],
@@ -1618,6 +1670,9 @@ async function main() {
       break;
     case "status":
       await handleStatus(argv);
+      break;
+    case "await-result":
+      await handleAwaitResult(argv);
       break;
     case "result":
       handleResult(argv);

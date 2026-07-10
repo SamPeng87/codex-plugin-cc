@@ -11,7 +11,7 @@ they already have.
 
 - `/codex:review` for a normal read-only Codex review
 - `/codex:adversarial-review` for a steerable challenge review
-- `/codex:rescue`, `/codex:transfer`, `/codex:status`, `/codex:result`, and `/codex:cancel` to delegate work, hand off sessions, and manage background jobs
+- `/codex:rescue`, `/codex:transfer`, `/codex:await-result`, `/codex:status`, `/codex:result`, and `/codex:cancel` to delegate work, hand off sessions, and manage background jobs
 
 ## Requirements
 
@@ -208,6 +208,16 @@ Examples:
 /codex:result
 /codex:result task-abc123
 ```
+
+### `/codex:await-result`
+
+Subscribes the current Claude orchestration flow to one durable background job. It launches a Claude Monitor watcher that waits for the companion job to reach a terminal state and emits the stored result directly, so the model does not need to poll `/codex:status`.
+
+```bash
+/codex:await-result task-abc123
+```
+
+The Monitor owns only the watcher. The Codex worker remains detached and continues if the Claude session or watcher stops. Use `/codex:status task-abc123` and invoke `/codex:await-result task-abc123` again to recover the subscription.
 
 ### `/codex:cancel`
 

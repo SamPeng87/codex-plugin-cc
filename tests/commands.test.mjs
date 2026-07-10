@@ -150,10 +150,27 @@ test("execute commands spawn code-executor subagent as independent commands", ()
   assert.match(agent, /Never turn a runtime failure into an empty response/i);
 });
 
+test("await-result uses Monitor only as a watcher for companion-owned jobs", () => {
+  const source = read("commands/await-result.md");
+
+  assert.match(source, /allowed-tools:\s*Monitor/);
+  assert.match(source, /Monitor\(\{/);
+  assert.match(source, /codex-companion\.mjs.*await-result/);
+  assert.match(source, /--jsonl/);
+  assert.match(source, /timeout_ms:\s*2820000/);
+  assert.match(source, /Codex worker remains detached and companion-owned/i);
+  assert.match(source, /main orchestrating agent/i);
+  assert.match(source, /never from `codex:code-executor`/i);
+  assert.match(source, /Do not monitor the launcher Agent or Skill task ID/i);
+  assert.match(source, /Do not poll `codex:status`/i);
+  assert.doesNotMatch(source, /run_in_background/);
+});
+
 test("continue is not exposed as a user-facing command", () => {
   const commandFiles = fs.readdirSync(path.join(PLUGIN_ROOT, "commands")).sort();
   assert.deepEqual(commandFiles, [
     "adversarial-review.md",
+    "await-result.md",
     "cancel.md",
     "design-review.md",
     "execute-fix.md",
