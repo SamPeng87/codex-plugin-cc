@@ -49,7 +49,9 @@ test("adversarial review command uses AskUserQuestion and background Bash while 
   assert.match(source, /```bash/);
   assert.match(source, /```typescript/);
   assert.match(source, /adversarial-review "\$ARGUMENTS"/);
-  assert.match(source, /\[--scope auto\|working-tree\|branch\] \[focus \.\.\.\]/);
+  assert.match(source, /\[--scope auto\|working-tree\|branch\] \[--model <model>\]/);
+  assert.match(source, /--effort <none\|minimal\|low\|medium\|high\|xhigh\|max>/);
+  assert.match(source, /do not include them in the focus text/i);
   assert.match(source, /run_in_background:\s*true/);
   assert.match(source, /command:\s*`node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/codex-companion\.mjs" adversarial-review "\$ARGUMENTS"`/);
   assert.match(source, /description:\s*"Codex adversarial review"/);
@@ -80,6 +82,10 @@ test("design-review command spawns document-reviewer subagent while staying revi
   assert.match(source, /design-review/);
   assert.match(source, /run_in_background:\s*true/);
   assert.match(source, /--path <vault-folder>/);
+  assert.match(source, /--model <model>/);
+  assert.match(source, /--effort <none\|minimal\|low\|medium\|high\|xhigh\|max>/);
+  assert.match(source, /do not include them in the focus text/i);
+  assert.match(source, /defaults this command to `--model gpt-5\.6-sol --effort max`/i);
   assert.match(source, /plan\.md/);
   assert.match(source, /subagent_type: "codex:document-reviewer"/);
   assert.match(source, /description:\s*"Codex design review"/);
@@ -101,6 +107,9 @@ test("test-plan-review command spawns document-reviewer subagent while staying r
   assert.match(source, /test-plan-review/);
   assert.match(source, /run_in_background:\s*true/);
   assert.match(source, /--path <vault-folder>/);
+  assert.match(source, /--model <model>/);
+  assert.match(source, /--effort <none\|minimal\|low\|medium\|high\|xhigh\|max>/);
+  assert.match(source, /do not include them in the focus text/i);
   assert.match(source, /test-plan\.md/);
   assert.match(source, /subagent_type: "codex:document-reviewer"/);
   assert.match(source, /description:\s*"Codex test plan review"/);
@@ -122,6 +131,8 @@ test("execute commands spawn code-executor subagent as independent commands", ()
     assert.match(source, /Agent/, `${name} uses Agent tool`);
     assert.match(source, /subagent_type: "codex:code-executor"/, `${name} uses code-executor agent`);
     assert.match(source, /--context-file/, `${name} accepts --context-file`);
+    assert.match(source, /--effort <none\|minimal\|low\|medium\|high\|xhigh\|max>/, `${name} accepts --effort`);
+    assert.match(source, /`--effort`/, `${name} forwards --effort`);
     assert.match(source, /--resume-last\|--fresh/, `${name} supports resume`);
     assert.match(source, /output verbatim/i, `${name} returns verbatim output`);
     assert.match(source, /codex-companion\.mjs/, `${name} calls companion script`);
@@ -180,7 +191,7 @@ test("rescue command absorbs continue semantics", () => {
   assert.match(rescue, /--background\|--wait/);
   assert.match(rescue, /--resume\|--fresh/);
   assert.match(rescue, /--model <model\|spark>/);
-  assert.match(rescue, /--effort <none\|minimal\|low\|medium\|high\|xhigh>/);
+  assert.match(rescue, /--effort <none\|minimal\|low\|medium\|high\|xhigh\|max>/);
   assert.match(rescue, /task-resume-candidate --json/);
   assert.match(rescue, /AskUserQuestion/);
   assert.match(rescue, /Continue current Codex thread/);
@@ -226,7 +237,7 @@ test("rescue command absorbs continue semantics", () => {
   assert.match(runtimeSkill, /Map `spark` to `--model gpt-5\.3-codex-spark`/i);
   assert.match(runtimeSkill, /If the forwarded request includes `--background` or `--wait`, treat that as Claude-side execution control only/i);
   assert.match(runtimeSkill, /Strip it before calling `task`/i);
-  assert.match(runtimeSkill, /`--effort`: accepted values are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`/i);
+  assert.match(runtimeSkill, /`--effort`: accepted values are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`/i);
   assert.match(runtimeSkill, /Do not inspect the repository, read files, grep, monitor progress, poll status, fetch results, cancel jobs, summarize output, or do any follow-up work of your own/i);
   assert.match(runtimeSkill, /If the Bash call fails or Codex cannot be invoked, return nothing/i);
   assert.match(readme, /`codex:codex-rescue` subagent/i);

@@ -369,6 +369,7 @@ test("review accepts the quoted raw argument style for built-in base-branch revi
 test("adversarial review renders structured findings over app-server turn/start", () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();
+  const statePath = path.join(binDir, "fake-codex-state.json");
   installFakeCodex(binDir);
   initGitRepo(repo);
   fs.mkdirSync(path.join(repo, "src"));
@@ -377,13 +378,39 @@ test("adversarial review renders structured findings over app-server turn/start"
   run("git", ["commit", "-m", "init"], { cwd: repo });
   fs.writeFileSync(path.join(repo, "src", "app.js"), "export const value = items[0].id;\n");
 
-  const result = run("node", [SCRIPT, "adversarial-review"], {
+  const result = run("node", [SCRIPT, "adversarial-review", "--model", "gpt-5.6-sol", "--effort", "max"], {
     cwd: repo,
     env: buildEnv(binDir)
   });
 
   assert.equal(result.status, 0);
   assert.match(result.stdout, /Missing empty-state guard/);
+  const fakeState = JSON.parse(fs.readFileSync(statePath, "utf8"));
+  assert.equal(fakeState.lastTurnStart.model, "gpt-5.6-sol");
+  assert.equal(fakeState.lastTurnStart.effort, "max");
+  assert.doesNotMatch(fakeState.lastTurnStart.prompt, /--effort/);
+});
+
+test("design review defaults to gpt-5.6-sol with max reasoning effort", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  const statePath = path.join(binDir, "fake-codex-state.json");
+  installFakeCodex(binDir);
+  initGitRepo(repo);
+  const vaultFolder = path.join(repo, "vault", "TASK-123");
+  fs.mkdirSync(vaultFolder, { recursive: true });
+  fs.writeFileSync(path.join(vaultFolder, "plan.md"), "# Plan\n\nKeep the design simple.\n");
+
+  const result = run("node", [SCRIPT, "design-review", "--path", vaultFolder], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const fakeState = JSON.parse(fs.readFileSync(statePath, "utf8"));
+  assert.equal(fakeState.lastTurnStart.model, "gpt-5.6-sol");
+  assert.equal(fakeState.lastTurnStart.effort, "max");
+  assert.doesNotMatch(fakeState.lastTurnStart.prompt, /--effort/);
 });
 
 test("adversarial review accepts the same base-branch targeting as review", () => {

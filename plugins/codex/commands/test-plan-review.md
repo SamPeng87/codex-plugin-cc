@@ -1,6 +1,6 @@
 ---
 description: Review a test strategy document (test-plan.md) from the Obsidian vault
-argument-hint: '[--wait|--background] [--path <vault-folder>|--task <task-id>] [focus ...]'
+argument-hint: '[--wait|--background] [--path <vault-folder>|--task <task-id>] [--model <model>] [--effort <none|minimal|low|medium|high|xhigh|max>] [focus ...]'
 disable-model-invocation: false
 allowed-tools: Bash(node:*), Bash(find:*), AskUserQuestion, Agent
 ---
@@ -33,6 +33,7 @@ Path resolution:
 - If the user provides `--task`, pass it through directly. The companion script resolves the vault folder.
 - If neither is provided, check the current conversation context for a vault folder or task ID. If found, use `--path`. Otherwise, ask the user.
 - It can also take extra focus text after the flags.
+- `--model` and `--effort` are runtime-selection flags. Forward them unchanged and do not include them in the focus text.
 
 Subagent prompt:
 When spawning the subagent, tell it:

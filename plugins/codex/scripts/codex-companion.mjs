@@ -73,7 +73,7 @@ const TEST_PLAN_REVIEW_SCHEMA = path.join(ROOT_DIR, "schemas", "test-plan-review
 const DESIGN_REVIEW_SCHEMA = path.join(ROOT_DIR, "schemas", "design-review-output.schema.json");
 const DEFAULT_STATUS_WAIT_TIMEOUT_MS = 240000;
 const DEFAULT_STATUS_POLL_INTERVAL_MS = 2000;
-const VALID_REASONING_EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh"]);
+const VALID_REASONING_EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max"]);
 const MODEL_ALIASES = new Map([["spark", "gpt-5.3-codex-spark"]]);
 const STOP_REVIEW_TASK_MARKER = "Run a stop-gate review of the previous Claude turn.";
 
@@ -83,13 +83,13 @@ function printUsage() {
       "Usage:",
       "  node scripts/codex-companion.mjs setup [--enable-review-gate|--disable-review-gate] [--json]",
       "  node scripts/codex-companion.mjs review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>]",
-      "  node scripts/codex-companion.mjs adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [focus text]",
-      "  node scripts/codex-companion.mjs design-review [--wait|--background] [--path <vault-folder>|--task <task-id>] [focus text]",
-      "  node scripts/codex-companion.mjs test-plan-review [--wait|--background] [--path <vault-folder>|--task <task-id>] [focus text]",
-      "  node scripts/codex-companion.mjs execute --context-file <path> [--phase implement|write-tests|fix-tests] [--model <model>] [--write] [--background]",
-      "  node scripts/codex-companion.mjs execute-test --context-file <path> [--model <model>] [--write] [--background]",
-      "  node scripts/codex-companion.mjs execute-fix --context-file <path> [--model <model>] [--write] [--background]",
-      "  node scripts/codex-companion.mjs task [--background] [--write] [--resume-last|--resume|--fresh] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh>] [prompt]",
+      "  node scripts/codex-companion.mjs adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [--model <model>] [--effort <none|minimal|low|medium|high|xhigh|max>] [focus text]",
+      "  node scripts/codex-companion.mjs design-review [--wait|--background] [--path <vault-folder>|--task <task-id>] [--model <model>] [--effort <none|minimal|low|medium|high|xhigh|max>] [focus text]",
+      "  node scripts/codex-companion.mjs test-plan-review [--wait|--background] [--path <vault-folder>|--task <task-id>] [--model <model>] [--effort <none|minimal|low|medium|high|xhigh|max>] [focus text]",
+      "  node scripts/codex-companion.mjs execute --context-file <path> [--phase implement|write-tests|fix-tests] [--model <model>] [--effort <none|minimal|low|medium|high|xhigh|max>] [--write] [--background]",
+      "  node scripts/codex-companion.mjs execute-test --context-file <path> [--model <model>] [--effort <none|minimal|low|medium|high|xhigh|max>] [--write] [--background]",
+      "  node scripts/codex-companion.mjs execute-fix --context-file <path> [--model <model>] [--effort <none|minimal|low|medium|high|xhigh|max>] [--write] [--background]",
+      "  node scripts/codex-companion.mjs task [--background] [--write] [--resume-last|--resume|--fresh] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh|max>] [prompt]",
       "  node scripts/codex-companion.mjs transfer [--source <claude-jsonl>] [--json]",
       "  node scripts/codex-companion.mjs status [job-id] [--all] [--json]",
       "  node scripts/codex-companion.mjs result [job-id] [--json]",
@@ -131,7 +131,7 @@ function normalizeReasoningEffort(effort) {
   }
   if (!VALID_REASONING_EFFORTS.has(normalized)) {
     throw new Error(
-      `Unsupported reasoning effort "${effort}". Use one of: none, minimal, low, medium, high, xhigh.`
+      `Unsupported reasoning effort "${effort}". Use one of: none, minimal, low, medium, high, xhigh, max.`
     );
   }
   return normalized;
@@ -580,6 +580,7 @@ async function executeReviewRun(request) {
   const result = await runAppServerTurn(context.repoRoot, {
     prompt,
     model: request.model,
+    effort: request.effort,
     sandbox: "read-only",
     outputSchema: readOutputSchema(REVIEW_SCHEMA),
     onProgress: request.onProgress
@@ -646,6 +647,7 @@ async function executeDocumentReviewRun(request) {
   const result = await runAppServerTurn(request.cwd, {
     prompt,
     model: request.model,
+    effort: request.effort,
     sandbox: "read-only",
     outputSchema: readOutputSchema(schemaPath),
     onProgress: request.onProgress
@@ -960,7 +962,7 @@ function enqueueBackgroundTask(cwd, job, request) {
 
 async function handleReviewCommand(argv, config) {
   const { options, positionals } = parseCommandInput(argv, {
-    valueOptions: ["base", "scope", "model", "cwd"],
+    valueOptions: ["base", "scope", "model", "effort", "cwd"],
     booleanOptions: ["json", "background", "wait"],
     aliasMap: {
       m: "model"
@@ -969,6 +971,8 @@ async function handleReviewCommand(argv, config) {
 
   const cwd = resolveCommandCwd(options);
   const workspaceRoot = resolveCommandWorkspace(options);
+  const model = normalizeRequestedModel(options.model);
+  const effort = normalizeReasoningEffort(options.effort);
   const focusText = positionals.join(" ").trim();
   const target = resolveReviewTarget(cwd, {
     base: options.base,
@@ -976,6 +980,9 @@ async function handleReviewCommand(argv, config) {
   });
 
   config.validateRequest?.(target, focusText);
+  if (config.reviewName === "Review" && effort != null) {
+    throw new Error(`/codex:review does not support --effort. Use /codex:adversarial-review for a steerable review turn.`);
+  }
   const metadata = buildReviewJobMetadata(config.reviewName, target);
   const job = createCompanionJob({
     prefix: "review",
@@ -992,7 +999,8 @@ async function handleReviewCommand(argv, config) {
         cwd,
         base: options.base,
         scope: options.scope,
-        model: options.model,
+        model,
+        effort,
         focusText,
         reviewName: config.reviewName,
         onProgress: progress
@@ -1003,7 +1011,7 @@ async function handleReviewCommand(argv, config) {
 
 async function handleDocumentReviewCommand(argv, config) {
   const { options, positionals } = parseCommandInput(argv, {
-    valueOptions: ["path", "task", "model", "cwd"],
+    valueOptions: ["path", "task", "model", "effort", "cwd"],
     booleanOptions: ["json", "background", "wait"],
     aliasMap: {
       m: "model",
@@ -1014,6 +1022,8 @@ async function handleDocumentReviewCommand(argv, config) {
 
   const cwd = resolveCommandCwd(options);
   const workspaceRoot = resolveCommandWorkspace(options);
+  const model = normalizeRequestedModel(options.model ?? config.defaultModel);
+  const effort = normalizeReasoningEffort(options.effort ?? config.defaultEffort);
   const focusText = positionals.join(" ").trim();
 
   let vaultFolder;
@@ -1048,7 +1058,8 @@ async function handleDocumentReviewCommand(argv, config) {
         vaultFolder,
         primaryDoc: config.primaryDoc,
         includeRelated: config.includeRelated,
-        model: options.model,
+        model,
+        effort,
         focusText,
         reviewName: config.reviewName,
         onProgress: progress
@@ -1448,7 +1459,9 @@ async function main() {
         reviewName: "Design Review",
         kind: "design-review",
         primaryDoc: "plan.md",
-        includeRelated: false
+        includeRelated: false,
+        defaultModel: "gpt-5.6-sol",
+        defaultEffort: "max"
       });
       break;
     case "test-plan-review":

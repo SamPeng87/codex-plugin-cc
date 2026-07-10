@@ -1,6 +1,6 @@
 ---
 description: Execute implementation coding with deterministic prompt assembly from vault context
-argument-hint: '[--background|--wait] --context-file <path> [--task <id>|--path <folder>] [--model <model>] [--write] [--resume-last|--fresh] [resume prompt...]'
+argument-hint: '[--background|--wait] --context-file <path> [--task <id>|--path <folder>] [--model <model>] [--effort <none|minimal|low|medium|high|xhigh|max>] [--write] [--resume-last|--fresh] [resume prompt...]'
 allowed-tools: Agent
 ---
 
@@ -21,7 +21,7 @@ Execution mode:
 - If the request includes `--wait`, run the subagent in the foreground.
 - If neither flag is present, default to foreground.
 - `--background` and `--wait` are execution flags for Claude Code. Do not forward them to the companion script.
-- `--resume-last`, `--resume`, `--fresh`, `--model`, `--write`, `--task`, `--path`, `--context-file` are runtime flags. Forward them to the companion script as-is.
+- `--resume-last`, `--resume`, `--fresh`, `--model`, `--effort`, `--write`, `--task`, `--path`, `--context-file` are runtime flags. Forward them to the companion script as-is.
 
 Operating rules:
 
