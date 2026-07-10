@@ -194,6 +194,7 @@ Use it to:
 
 - check progress on background work
 - distinguish a live worker from a stale job and see the last real activity time
+- inspect the worker and turn IDs, latest Codex message, cumulative file changes, and recent activity
 - see the latest completed job
 - confirm whether a task is still running
 
@@ -211,13 +212,13 @@ Examples:
 
 ### `/codex:await-result`
 
-Subscribes the current Claude orchestration flow to one durable background job. It launches a Claude Monitor watcher that waits for the companion job to reach a terminal state and emits the stored result directly, so the model does not need to poll `/codex:status`.
+Subscribes the current Claude orchestration flow to one durable background job. It launches a Claude Monitor watcher that stays silent during ordinary Codex activity and reports lifecycle changes and terminal state without polling `/codex:status`.
 
 ```bash
 /codex:await-result task-abc123
 ```
 
-The Monitor owns only the watcher. The Codex worker remains detached and continues if the Claude session or watcher stops. Use `/codex:status task-abc123` and invoke `/codex:await-result task-abc123` again to recover the subscription.
+The Monitor owns only the watcher. The Codex worker remains detached and continues if the Claude session or watcher stops. At terminal state, the orchestration flow calls `/codex:result task-abc123` to read the durable stored result instead of parsing Monitor output. Use `/codex:status task-abc123` for detailed progress, and invoke `/codex:await-result task-abc123` again to recover an interrupted subscription.
 
 ### `/codex:cancel`
 

@@ -99,6 +99,14 @@ function escapeMarkdownCell(value) {
     .trim();
 }
 
+function compactStatusText(value, limit = 500) {
+  const compact = String(value ?? "").replace(/\s+/g, " ").trim();
+  if (compact.length <= limit) {
+    return compact;
+  }
+  return `${compact.slice(0, limit - 3)}...`;
+}
+
 function formatCodexResumeCommand(job) {
   if (!job?.threadId) {
     return null;
@@ -146,8 +154,27 @@ function pushJobDetails(lines, job, options = {}) {
   } else if ((job.status === "queued" || job.status === "running") && job.workerAlive === null) {
     lines.push("  Worker process: starting");
   }
+  if (job.workerPid) {
+    lines.push(`  Worker PID: ${job.workerPid}`);
+  }
   if (job.threadId) {
     lines.push(`  Codex session ID: ${job.threadId}`);
+  }
+  if (job.turnId) {
+    lines.push(`  Codex turn ID: ${job.turnId}`);
+  }
+  if (job.lastMessage) {
+    const source = job.lastMessageSource ? ` (${job.lastMessageSource})` : "";
+    lines.push(`  Latest Codex message${source}: ${compactStatusText(job.lastMessage)}`);
+  }
+  if (job.changeSummary) {
+    const files = Array.isArray(job.changeSummary.files) ? job.changeSummary.files : [];
+    const additions = Math.max(0, Number(job.changeSummary.additions) || 0);
+    const deletions = Math.max(0, Number(job.changeSummary.deletions) || 0);
+    lines.push(`  File changes: ${job.changeSummary.filesChanged ?? files.length} file(s), +${additions}/-${deletions}`);
+    if (files.length > 0) {
+      lines.push(`  Changed files: ${files.join(", ")}`);
+    }
   }
   const resumeCommand = formatCodexResumeCommand(job);
   if (resumeCommand) {

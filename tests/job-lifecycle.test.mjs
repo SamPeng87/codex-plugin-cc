@@ -428,9 +428,26 @@ test("job status output separates worker liveness from the last activity", () =>
     title: "Codex Task",
     lastActivityAt: "2026-07-10T01:00:00.000Z",
     lastActivityAgo: "12s",
-    workerAlive: true
+    workerAlive: true,
+    workerPid: 5252,
+    threadId: "thread-visible",
+    turnId: "turn-visible",
+    lastMessage: "Implemented the parser.\nRunning focused tests now.",
+    lastMessageSource: "Assistant message",
+    changeSummary: {
+      files: ["src/parser.mjs", "tests/parser.test.mjs"],
+      filesChanged: 2,
+      additions: 8,
+      deletions: 3
+    }
   });
 
   assert.match(rendered, /Last activity: 2026-07-10T01:00:00\.000Z \(12s ago\)/);
   assert.match(rendered, /Worker process: alive/);
+  assert.match(rendered, /Worker PID: 5252/);
+  assert.match(rendered, /Codex session ID: thread-visible/);
+  assert.match(rendered, /Codex turn ID: turn-visible/);
+  assert.match(rendered, /Latest Codex message \(Assistant message\): Implemented the parser\. Running focused tests now\./);
+  assert.match(rendered, /File changes: 2 file\(s\), \+8\/-3/);
+  assert.match(rendered, /Changed files: src\/parser\.mjs, tests\/parser\.test\.mjs/);
 });

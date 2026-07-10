@@ -1027,6 +1027,37 @@ test("task --background streams progress before the await-result terminal event"
   });
 });
 
+test("await-result monitor mode emits only lifecycle state and a compact result handoff", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir, "slow-task-with-file-change");
+  initGitRepo(repo);
+  fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
+  run("git", ["add", "README.md"], { cwd: repo });
+  run("git", ["commit", "-m", "init"], { cwd: repo });
+
+  const launched = run("node", [SCRIPT, "task", "--background", "--json", "investigate the failing test"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+  assert.equal(launched.status, 0, launched.stderr);
+  const launchPayload = JSON.parse(launched.stdout);
+
+  const awaited = run(
+    "node",
+    [SCRIPT, "await-result", launchPayload.jobId, "--timeout-ms", "15000", "--poll-interval-ms", "100", "--monitor"],
+    { cwd: repo, env: buildEnv(binDir) }
+  );
+
+  assert.equal(awaited.status, 0, awaited.stderr);
+  const lines = awaited.stdout.trimEnd().split("\n");
+  assert.ok(lines.length >= 1 && lines.length <= 2, `unexpected monitor output: ${awaited.stdout}`);
+  assert.match(lines.at(-1), new RegExp(`Codex job ${launchPayload.jobId} completed`));
+  assert.match(lines.at(-1), new RegExp(`/codex:result ${launchPayload.jobId}`));
+  assert.equal(lines.some((line) => line.startsWith("{")), false);
+  assert.equal(lines.some((line) => /Applying|Command completed|src\/parser/.test(line)), false);
+});
+
 test("review rejects focus text because it is native-review only", () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();

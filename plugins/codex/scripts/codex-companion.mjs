@@ -93,7 +93,7 @@ function printUsage() {
       "  node scripts/codex-companion.mjs task [--background|--wait] [--write] [--resume-last|--resume|--fresh] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh|max>] [prompt]",
       "  node scripts/codex-companion.mjs transfer [--source <claude-jsonl>] [--json]",
       "  node scripts/codex-companion.mjs status [job-id] [--all] [--json]",
-      "  node scripts/codex-companion.mjs await-result <job-id> [--timeout-ms <ms>] [--json|--jsonl]",
+      "  node scripts/codex-companion.mjs await-result <job-id> [--timeout-ms <ms>] [--json|--jsonl|--monitor]",
       "  node scripts/codex-companion.mjs result [job-id] [--json]",
       "  node scripts/codex-companion.mjs cancel [job-id] [--json]"
     ].join("\n")
@@ -527,6 +527,19 @@ function buildAwaitProgressPayload(snapshot) {
       progressPreview: job.progressPreview ?? []
     }
   };
+}
+
+function renderMonitorState(job) {
+  const worker = job.workerAlive === true ? "alive" : job.workerAlive === false ? "stopped" : "starting";
+  const elapsed = job.elapsed ? ` after ${job.elapsed}` : "";
+  const phase = job.phase ? `, phase ${job.phase}` : "";
+  return `Codex job ${job.id} is ${job.status}${phase}${elapsed}; worker ${worker}. Use /codex:status ${job.id} for details.`;
+}
+
+function renderMonitorTerminal(job) {
+  const duration = job.duration ?? job.elapsed;
+  const elapsed = duration ? ` after ${duration}` : "";
+  return `Codex job ${job.id} ${job.status}${elapsed}. Fetch the stored output with /codex:result ${job.id}.`;
 }
 
 async function resolveLatestTrackedTaskThread(cwd, options = {}) {
@@ -1428,11 +1441,11 @@ async function handleStatus(argv) {
 async function handleAwaitResult(argv) {
   const { options, positionals } = parseCommandInput(argv, {
     valueOptions: ["cwd", "timeout-ms", "poll-interval-ms"],
-    booleanOptions: ["json", "jsonl"]
+    booleanOptions: ["json", "jsonl", "monitor"]
   });
 
-  if (options.json && options.jsonl) {
-    throw new Error("Choose either --json or --jsonl.");
+  if ([options.json, options.jsonl, options.monitor].filter(Boolean).length > 1) {
+    throw new Error("Choose only one of --json, --jsonl, or --monitor.");
   }
 
   const outputAwaitResult = (payload, rendered, event) => {
@@ -1450,26 +1463,37 @@ async function handleAwaitResult(argv) {
   }
 
   let lastProgressFingerprint = null;
+  let monitorBaselineInitialized = false;
   const emitProgressSnapshot = (progressSnapshot) => {
-    if (!options.jsonl || !isActiveJobStatus(progressSnapshot.job.status)) {
+    if ((!options.jsonl && !options.monitor) || !isActiveJobStatus(progressSnapshot.job.status)) {
       return;
     }
     const payload = buildAwaitProgressPayload(progressSnapshot);
-    const fingerprint = JSON.stringify({
-      status: payload.job.status,
-      phase: payload.job.phase,
-      lastActivityAt: payload.job.lastActivityAt,
-      workerAlive: payload.job.workerAlive,
-      lastMessage: payload.job.lastMessage,
-      lastMessageSource: payload.job.lastMessageSource,
-      changeSummary: payload.job.changeSummary,
-      progressPreview: payload.job.progressPreview
-    });
+    const fingerprint = options.monitor
+      ? JSON.stringify({
+          status: payload.job.status,
+          workerAlive: payload.job.workerAlive
+        })
+      : JSON.stringify({
+          status: payload.job.status,
+          phase: payload.job.phase,
+          lastActivityAt: payload.job.lastActivityAt,
+          workerAlive: payload.job.workerAlive,
+          lastMessage: payload.job.lastMessage,
+          lastMessageSource: payload.job.lastMessageSource,
+          changeSummary: payload.job.changeSummary,
+          progressPreview: payload.job.progressPreview
+        });
+    if (options.monitor && !monitorBaselineInitialized) {
+      monitorBaselineInitialized = true;
+      lastProgressFingerprint = fingerprint;
+      return;
+    }
     if (fingerprint === lastProgressFingerprint) {
       return;
     }
     lastProgressFingerprint = fingerprint;
-    console.log(JSON.stringify(payload));
+    console.log(options.monitor ? renderMonitorState(payload.job) : JSON.stringify(payload));
   };
 
   const snapshot = await waitForSingleJobSnapshot(cwd, reference, {
@@ -1479,12 +1503,27 @@ async function handleAwaitResult(argv) {
   });
 
   if (snapshot.waitTimedOut) {
+    if (options.monitor) {
+      console.log(
+        `Codex watcher timed out after ${snapshot.job.elapsed ?? "the configured limit"}; job ${snapshot.job.id} is still ${snapshot.job.status}. Use /codex:status ${snapshot.job.id}.`
+      );
+      process.exitCode = 2;
+      return;
+    }
     const payload = {
       ...snapshot,
       error: `Timed out waiting for ${snapshot.job.id} to finish.`
     };
     outputAwaitResult(payload, renderJobStatusReport(snapshot.job), "timeout");
     process.exitCode = 2;
+    return;
+  }
+
+  if (options.monitor) {
+    console.log(renderMonitorTerminal(snapshot.job));
+    if (snapshot.job.status !== "completed") {
+      process.exitCode = 1;
+    }
     return;
   }
 

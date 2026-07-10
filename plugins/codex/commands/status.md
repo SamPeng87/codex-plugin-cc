@@ -1,5 +1,5 @@
 ---
-description: Show active and recent Codex jobs for this repository, including review-gate status
+description: Show detailed active and recent Codex job state, activity, messages, file changes, thread IDs, and review-gate status
 argument-hint: '[job-id] [--wait] [--timeout-ms <ms>] [--all] [--json]'
 disable-model-invocation: true
 allowed-tools: Bash(node:*)

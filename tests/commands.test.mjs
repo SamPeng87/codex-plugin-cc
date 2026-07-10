@@ -153,19 +153,19 @@ test("execute commands spawn code-executor subagent as independent commands", ()
 test("await-result uses Monitor only as a watcher for companion-owned jobs", () => {
   const source = read("commands/await-result.md");
 
-  assert.match(source, /allowed-tools:\s*Monitor/);
+  assert.match(source, /allowed-tools:\s*Monitor,\s*Skill/);
   assert.match(source, /Monitor\(\{/);
   assert.match(source, /codex-companion\.mjs.*await-result/);
-  assert.match(source, /--jsonl/);
+  assert.match(source, /--monitor/);
   assert.match(source, /timeout_ms:\s*2820000/);
   assert.match(source, /Codex worker remains detached and companion-owned/i);
   assert.match(source, /main orchestrating agent/i);
   assert.match(source, /never from `codex:code-executor`/i);
   assert.match(source, /Do not monitor the launcher Agent or Skill task ID/i);
-  assert.match(source, /Do not poll `codex:status`/i);
-  assert.match(source, /event: \"progress\"/i);
-  assert.match(source, /latest Codex message/i);
-  assert.match(source, /file-change statistics/i);
+  assert.match(source, /lifecycle-only/i);
+  assert.match(source, /invoke `codex:result`/i);
+  assert.match(source, /Never read the Monitor task output file/i);
+  assert.doesNotMatch(source, /--jsonl/);
   assert.doesNotMatch(source, /run_in_background/);
 });
 
@@ -284,7 +284,7 @@ test("transfer, result, and cancel commands are exposed as deterministic runtime
   assert.match(transfer, /disable-model-invocation:\s*true/);
   assert.match(transfer, /codex-companion\.mjs" transfer "\$ARGUMENTS"/);
   assert.match(transfer, /codex resume <session-id>/);
-  assert.match(result, /disable-model-invocation:\s*true/);
+  assert.match(result, /disable-model-invocation:\s*false/);
   assert.match(result, /codex-companion\.mjs" result "\$ARGUMENTS"/);
   assert.match(cancel, /disable-model-invocation:\s*true/);
   assert.match(cancel, /codex-companion\.mjs" cancel "\$ARGUMENTS"/);
