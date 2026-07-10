@@ -6,7 +6,7 @@
  * @typedef {import("./app-server-protocol").ThreadStartParams} ThreadStartParams
  * @typedef {import("./app-server-protocol").Turn} Turn
  * @typedef {import("./app-server-protocol").UserInput} UserInput
- * @typedef {((update: string | { message: string, phase: string | null, threadId?: string | null, turnId?: string | null, stderrMessage?: string | null, logTitle?: string | null, logBody?: string | null }) => void)} ProgressReporter
+ * @typedef {((update: string | { message: string, phase: string | null, threadId?: string | null, turnId?: string | null, stderrMessage?: string | null, logTitle?: string | null, logBody?: string | null, fileChangeDelta?: { files: string[], additions: number, deletions: number } | null }) => void)} ProgressReporter
  * @typedef {{
  *   threadId: string,
  *   rootThreadId: string,
@@ -139,6 +139,39 @@ function collectTouchedFiles(fileChanges) {
   return [...paths];
 }
 
+function summarizeFileChanges(changes) {
+  const files = new Set();
+  let additions = 0;
+  let deletions = 0;
+
+  for (const change of changes ?? []) {
+    if (change.path) {
+      files.add(change.path);
+    }
+    let inHunk = false;
+    for (const line of String(change.diff ?? "").split(/\r?\n/)) {
+      if (line.startsWith("@@")) {
+        inHunk = true;
+        continue;
+      }
+      if (line.startsWith("diff --git ")) {
+        inHunk = false;
+        continue;
+      }
+      if (!inHunk) {
+        continue;
+      }
+      if (line.startsWith("+")) {
+        additions += 1;
+      } else if (line.startsWith("-")) {
+        deletions += 1;
+      }
+    }
+  }
+
+  return { files: [...files], additions, deletions };
+}
+
 function normalizeReasoningText(text) {
   return String(text ?? "").replace(/\s+/g, " ").trim();
 }
@@ -213,7 +246,8 @@ function emitLogEvent(onProgress, options = {}) {
     phase: options.phase ?? null,
     stderrMessage: options.stderrMessage ?? null,
     logTitle: options.logTitle ?? null,
-    logBody: options.logBody ?? null
+    logBody: options.logBody ?? null,
+    fileChangeDelta: options.fileChangeDelta ?? null
   });
 }
 
@@ -283,7 +317,11 @@ function describeCompletedItem(state, item) {
       };
     }
     case "fileChange":
-      return { message: `File changes ${item.status}.`, phase: "editing" };
+      return {
+        message: `File changes ${item.status}.`,
+        phase: "editing",
+        fileChangeDelta: item.status === "completed" ? summarizeFileChanges(item.changes) : null
+      };
     case "mcpToolCall":
       return { message: `Tool ${item.server}/${item.tool} ${item.status}.`, phase: "investigating" };
     case "dynamicToolCall":
@@ -538,7 +576,12 @@ function applyTurnNotification(state, message) {
       recordItem(state, message.params.item, "completed", message.params.threadId ?? null);
       {
         const update = describeCompletedItem(state, message.params.item);
-        emitProgress(state.onProgress, update?.message, update?.phase ?? null);
+        emitProgress(
+          state.onProgress,
+          update?.message,
+          update?.phase ?? null,
+          update?.fileChangeDelta ? { fileChangeDelta: update.fileChangeDelta } : {}
+        );
       }
       break;
     case "error":

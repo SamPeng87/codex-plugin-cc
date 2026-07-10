@@ -4,6 +4,7 @@ import process from "node:process";
 import { resolveJobLogFile, updateJobRecord } from "./state.mjs";
 
 export const SESSION_ID_ENV = "CODEX_COMPANION_SESSION_ID";
+const MAX_STORED_PROGRESS_MESSAGE_LENGTH = 1000;
 
 export function nowIso() {
   return new Date().toISOString();
@@ -18,7 +19,17 @@ function normalizeProgressEvent(value) {
       turnId: typeof value.turnId === "string" && value.turnId.trim() ? value.turnId.trim() : null,
       stderrMessage: value.stderrMessage == null ? null : String(value.stderrMessage).trim(),
       logTitle: typeof value.logTitle === "string" && value.logTitle.trim() ? value.logTitle.trim() : null,
-      logBody: value.logBody == null ? null : String(value.logBody).trimEnd()
+      logBody: value.logBody == null ? null : String(value.logBody).trimEnd(),
+      fileChangeDelta:
+        value.fileChangeDelta && typeof value.fileChangeDelta === "object"
+          ? {
+              files: Array.isArray(value.fileChangeDelta.files)
+                ? value.fileChangeDelta.files.map((file) => String(file)).filter(Boolean)
+                : [],
+              additions: Math.max(0, Number(value.fileChangeDelta.additions) || 0),
+              deletions: Math.max(0, Number(value.fileChangeDelta.deletions) || 0)
+            }
+          : null
     };
   }
 
@@ -29,8 +40,17 @@ function normalizeProgressEvent(value) {
     turnId: null,
     stderrMessage: String(value ?? "").trim(),
     logTitle: null,
-    logBody: null
+    logBody: null,
+    fileChangeDelta: null
   };
+}
+
+function truncateProgressMessage(value) {
+  const message = String(value ?? "").trim();
+  if (message.length <= MAX_STORED_PROGRESS_MESSAGE_LENGTH) {
+    return message;
+  }
+  return `${message.slice(0, MAX_STORED_PROGRESS_MESSAGE_LENGTH - 3)}...`;
 }
 
 export function appendLogLine(logFile, message) {
@@ -95,14 +115,33 @@ export function createJobProgressUpdater(workspaceRoot, jobId) {
       patch.turnId = normalized.turnId;
     }
 
+    if (
+      normalized.logBody &&
+      (normalized.logTitle === "Assistant message" || /^Subagent .+ message$/.test(normalized.logTitle ?? ""))
+    ) {
+      patch.lastMessage = truncateProgressMessage(normalized.logBody);
+      patch.lastMessageSource = normalized.logTitle;
+    }
+
     updateJobRecord(workspaceRoot, jobId, (current, { indexedJob }) => {
       if (!indexedJob || !current || !isActiveJobStatus(current.status)) {
         return null;
       }
-      return {
+      const next = {
         ...current,
         ...patch
       };
+      if (normalized.fileChangeDelta) {
+        const previous = current.changeSummary ?? {};
+        const files = new Set([...(previous.files ?? []), ...normalized.fileChangeDelta.files]);
+        next.changeSummary = {
+          files: [...files],
+          filesChanged: files.size,
+          additions: Math.max(0, Number(previous.additions) || 0) + normalized.fileChangeDelta.additions,
+          deletions: Math.max(0, Number(previous.deletions) || 0) + normalized.fileChangeDelta.deletions
+        };
+      }
+      return next;
     });
   };
 }

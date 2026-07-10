@@ -981,10 +981,10 @@ test("task using the shared broker still completes when Codex spawns subagents",
   assert.equal(result.stdout, "Handled the requested task.\nTask prompt accepted.\n");
 });
 
-test("task --background can be consumed through one await-result watcher", () => {
+test("task --background streams progress before the await-result terminal event", () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();
-  installFakeCodex(binDir, "slow-task");
+  installFakeCodex(binDir, "slow-task-with-file-change");
   initGitRepo(repo);
   fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
   run("git", ["add", "README.md"], { cwd: repo });
@@ -1002,7 +1002,7 @@ test("task --background can be consumed through one await-result watcher", () =>
 
   const awaited = run(
     "node",
-    [SCRIPT, "await-result", launchPayload.jobId, "--timeout-ms", "15000", "--json"],
+    [SCRIPT, "await-result", launchPayload.jobId, "--timeout-ms", "15000", "--poll-interval-ms", "100", "--jsonl"],
     {
       cwd: repo,
       env: buildEnv(binDir)
@@ -1010,10 +1010,21 @@ test("task --background can be consumed through one await-result watcher", () =>
   );
 
   assert.equal(awaited.status, 0, awaited.stderr);
-  const awaitedPayload = JSON.parse(awaited.stdout);
-  assert.equal(awaitedPayload.job.id, launchPayload.jobId);
-  assert.equal(awaitedPayload.job.status, "completed");
-  assert.match(awaitedPayload.storedJob.rendered, /Handled the requested task/);
+  const events = awaited.stdout.trimEnd().split("\n").map((line) => JSON.parse(line));
+  assert.equal(events[0].event, "progress");
+  assert.equal(events[0].job.id, launchPayload.jobId);
+  assert.equal(events[0].job.status === "queued" || events[0].job.status === "running", true);
+  const terminal = events.at(-1);
+  assert.equal(terminal.event, "result");
+  assert.equal(terminal.job.id, launchPayload.jobId);
+  assert.equal(terminal.job.status, "completed");
+  assert.match(terminal.storedJob.rendered, /Handled the requested task/);
+  assert.deepEqual(terminal.storedJob.changeSummary, {
+    files: ["src/parser.mjs", "tests/parser.test.mjs"],
+    filesChanged: 2,
+    additions: 3,
+    deletions: 1
+  });
 });
 
 test("review rejects focus text because it is native-review only", () => {
@@ -1452,6 +1463,43 @@ test("await-result reports watcher timeout with a non-zero exit", () => {
   assert.match(payload.error, /Timed out waiting for task-live/);
 });
 
+test("await-result jsonl suppresses unchanged polling snapshots", () => {
+  const workspace = makeTempDir();
+  const stateDir = resolveStateDir(workspace);
+  const jobsDir = path.join(stateDir, "jobs");
+  fs.mkdirSync(jobsDir, { recursive: true });
+
+  const job = {
+    id: "task-quiet",
+    status: "running",
+    phase: "running",
+    title: "Codex Task",
+    jobClass: "task",
+    pid: process.pid,
+    workerPid: process.pid,
+    createdAt: "2026-03-18T15:30:00.000Z",
+    startedAt: "2026-03-18T15:30:01.000Z",
+    lastActivityAt: "2026-03-18T15:30:02.000Z",
+    updatedAt: "2026-03-18T15:30:02.000Z"
+  };
+  fs.writeFileSync(path.join(jobsDir, "task-quiet.json"), `${JSON.stringify(job, null, 2)}\n`, "utf8");
+  fs.writeFileSync(
+    path.join(stateDir, "state.json"),
+    `${JSON.stringify({ version: 1, config: { stopReviewGate: false }, jobs: [job] }, null, 2)}\n`,
+    "utf8"
+  );
+
+  const result = run(
+    "node",
+    [SCRIPT, "await-result", "task-quiet", "--timeout-ms", "250", "--poll-interval-ms", "50", "--jsonl"],
+    { cwd: workspace }
+  );
+
+  assert.equal(result.status, 2, result.stderr);
+  const events = result.stdout.trimEnd().split("\n").map((line) => JSON.parse(line));
+  assert.deepEqual(events.map((event) => event.event), ["progress", "timeout"]);
+});
+
 test("await-result returns stored failure details with a non-zero exit", () => {
   const workspace = makeTempDir();
   const stateDir = resolveStateDir(workspace);
@@ -1480,6 +1528,7 @@ test("await-result returns stored failure details with a non-zero exit", () => {
   assert.equal(result.status, 1, result.stderr);
   assert.equal(result.stdout.trimEnd().split("\n").length, 1);
   const payload = JSON.parse(result.stdout);
+  assert.equal(payload.event, "result");
   assert.equal(payload.job.id, "task-failed");
   assert.equal(payload.job.status, "failed");
   assert.equal(payload.storedJob.errorMessage, "Codex app-server exited before turn completion.");

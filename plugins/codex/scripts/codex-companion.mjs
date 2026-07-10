@@ -492,16 +492,40 @@ async function waitForSingleJobSnapshot(cwd, reference, options = {}) {
   const pollIntervalMs = Math.max(100, Number(options.pollIntervalMs) || DEFAULT_STATUS_POLL_INTERVAL_MS);
   const deadline = Date.now() + timeoutMs;
   let snapshot = buildSingleJobSnapshot(cwd, reference);
+  options.onSnapshot?.(snapshot);
 
   while (isActiveJobStatus(snapshot.job.status) && Date.now() < deadline) {
     await sleep(Math.min(pollIntervalMs, Math.max(0, deadline - Date.now())));
     snapshot = buildSingleJobSnapshot(cwd, reference);
+    options.onSnapshot?.(snapshot);
   }
 
   return {
     ...snapshot,
     waitTimedOut: isActiveJobStatus(snapshot.job.status),
     timeoutMs
+  };
+}
+
+function buildAwaitProgressPayload(snapshot) {
+  const { job } = snapshot;
+  return {
+    event: "progress",
+    job: {
+      id: job.id,
+      title: job.title ?? null,
+      kind: job.kindLabel ?? job.kind ?? null,
+      status: job.status,
+      phase: job.phase ?? null,
+      elapsed: job.elapsed ?? null,
+      lastActivityAt: job.lastActivityAt ?? null,
+      lastActivityAgo: job.lastActivityAgo ?? null,
+      workerAlive: job.workerAlive ?? null,
+      lastMessage: job.lastMessage ?? null,
+      lastMessageSource: job.lastMessageSource ?? null,
+      changeSummary: job.changeSummary ?? null,
+      progressPreview: job.progressPreview ?? []
+    }
   };
 }
 
@@ -1411,9 +1435,9 @@ async function handleAwaitResult(argv) {
     throw new Error("Choose either --json or --jsonl.");
   }
 
-  const outputAwaitResult = (payload, rendered) => {
+  const outputAwaitResult = (payload, rendered, event) => {
     if (options.jsonl) {
-      console.log(JSON.stringify(payload));
+      console.log(JSON.stringify({ event, ...payload }));
       return;
     }
     outputCommandResult(payload, rendered, options.json);
@@ -1425,9 +1449,33 @@ async function handleAwaitResult(argv) {
     throw new Error("`await-result` requires a job id.");
   }
 
+  let lastProgressFingerprint = null;
+  const emitProgressSnapshot = (progressSnapshot) => {
+    if (!options.jsonl || !isActiveJobStatus(progressSnapshot.job.status)) {
+      return;
+    }
+    const payload = buildAwaitProgressPayload(progressSnapshot);
+    const fingerprint = JSON.stringify({
+      status: payload.job.status,
+      phase: payload.job.phase,
+      lastActivityAt: payload.job.lastActivityAt,
+      workerAlive: payload.job.workerAlive,
+      lastMessage: payload.job.lastMessage,
+      lastMessageSource: payload.job.lastMessageSource,
+      changeSummary: payload.job.changeSummary,
+      progressPreview: payload.job.progressPreview
+    });
+    if (fingerprint === lastProgressFingerprint) {
+      return;
+    }
+    lastProgressFingerprint = fingerprint;
+    console.log(JSON.stringify(payload));
+  };
+
   const snapshot = await waitForSingleJobSnapshot(cwd, reference, {
     timeoutMs: options["timeout-ms"] ?? DEFAULT_AWAIT_RESULT_TIMEOUT_MS,
-    pollIntervalMs: options["poll-interval-ms"]
+    pollIntervalMs: options["poll-interval-ms"],
+    onSnapshot: emitProgressSnapshot
   });
 
   if (snapshot.waitTimedOut) {
@@ -1435,7 +1483,7 @@ async function handleAwaitResult(argv) {
       ...snapshot,
       error: `Timed out waiting for ${snapshot.job.id} to finish.`
     };
-    outputAwaitResult(payload, renderJobStatusReport(snapshot.job));
+    outputAwaitResult(payload, renderJobStatusReport(snapshot.job), "timeout");
     process.exitCode = 2;
     return;
   }
@@ -1445,7 +1493,7 @@ async function handleAwaitResult(argv) {
     job: snapshot.job,
     storedJob
   };
-  outputAwaitResult(payload, renderStoredJobResult(snapshot.job, storedJob));
+  outputAwaitResult(payload, renderStoredJobResult(snapshot.job, storedJob), "result");
   if (snapshot.job.status !== "completed") {
     process.exitCode = 1;
   }

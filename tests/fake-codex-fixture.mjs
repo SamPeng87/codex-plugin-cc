@@ -590,6 +590,29 @@ rl.on("line", (line) => {
               }
             ]
             : []),
+          ...(BEHAVIOR === "slow-task-with-file-change"
+            ? [
+                {
+                  completed: {
+                    type: "fileChange",
+                    id: "patch_" + turnId,
+                    status: "completed",
+                    changes: [
+                      {
+                        path: "src/parser.mjs",
+                        kind: "update",
+                        diff: "diff --git a/src/parser.mjs b/src/parser.mjs\\n--- a/src/parser.mjs\\n+++ b/src/parser.mjs\\n@@ -1,2 +1,3 @@\\n-old\\n+new\\n+another\\n context"
+                      },
+                      {
+                        path: "tests/parser.test.mjs",
+                        kind: "add",
+                        diff: "diff --git a/tests/parser.test.mjs b/tests/parser.test.mjs\\n--- /dev/null\\n+++ b/tests/parser.test.mjs\\n@@ -0,0 +1 @@\\n+test"
+                      }
+                    ]
+                  }
+                }
+              ]
+            : []),
           {
             completed: { type: "agentMessage", id: "msg_" + turnId, text: payload, phase: "final_answer" }
           }
@@ -615,7 +638,7 @@ rl.on("line", (line) => {
 	            send({ method: "turn/completed", params: { threadId: thread.id, turn: buildTurn(turnId, "completed") } });
 	          }, 5000);
 	          interruptibleTurns.set(turnId, { threadId: thread.id, timer });
-	        } else if (BEHAVIOR === "slow-task") {
+	        } else if (BEHAVIOR === "slow-task" || BEHAVIOR === "slow-task-with-file-change") {
 	          emitTurnCompletedLater(thread.id, turnId, items, 400);
 	        } else {
 	          emitTurnCompleted(thread.id, turnId, items);

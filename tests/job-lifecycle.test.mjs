@@ -332,6 +332,57 @@ test("progress events update activity even when phase and turn identifiers do no
   assert.equal(listJobs(workspace)[0].lastActivityAt, secondActivityAt);
 });
 
+test("progress events retain the latest assistant message and aggregate file changes", () => {
+  const workspace = makeTempDir();
+  const jobId = "task-progress-details";
+  const initial = {
+    id: jobId,
+    status: "running",
+    phase: "editing",
+    workspaceRoot: workspace,
+    pid: process.pid,
+    workerPid: process.pid,
+    lastActivityAt: "2026-07-10T01:00:00.000Z"
+  };
+  writeJobFile(workspace, jobId, initial);
+  upsertJob(workspace, initial);
+  const updateProgress = createJobProgressUpdater(workspace, jobId);
+
+  updateProgress({
+    message: "Assistant message captured: implementing the parser",
+    logTitle: "Assistant message",
+    logBody: "Implemented the parser and started its focused tests."
+  });
+  updateProgress({
+    message: "File changes completed.",
+    phase: "editing",
+    fileChangeDelta: {
+      files: ["src/parser.mjs", "tests/parser.test.mjs"],
+      additions: 18,
+      deletions: 4
+    }
+  });
+  updateProgress({
+    message: "File changes completed.",
+    phase: "editing",
+    fileChangeDelta: {
+      files: ["src/parser.mjs"],
+      additions: 3,
+      deletions: 1
+    }
+  });
+
+  const stored = readJobFile(resolveJobFile(workspace, jobId));
+  assert.equal(stored.lastMessage, "Implemented the parser and started its focused tests.");
+  assert.equal(stored.lastMessageSource, "Assistant message");
+  assert.deepEqual(stored.changeSummary, {
+    files: ["src/parser.mjs", "tests/parser.test.mjs"],
+    filesChanged: 2,
+    additions: 21,
+    deletions: 5
+  });
+});
+
 test("a tracked runner cannot overwrite a terminal state written by cancellation", async () => {
   const workspace = makeTempDir();
   const jobId = "task-cancel-race";

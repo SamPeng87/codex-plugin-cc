@@ -163,6 +163,9 @@ test("await-result uses Monitor only as a watcher for companion-owned jobs", () 
   assert.match(source, /never from `codex:code-executor`/i);
   assert.match(source, /Do not monitor the launcher Agent or Skill task ID/i);
   assert.match(source, /Do not poll `codex:status`/i);
+  assert.match(source, /event: \"progress\"/i);
+  assert.match(source, /latest Codex message/i);
+  assert.match(source, /file-change statistics/i);
   assert.doesNotMatch(source, /run_in_background/);
 });
 
