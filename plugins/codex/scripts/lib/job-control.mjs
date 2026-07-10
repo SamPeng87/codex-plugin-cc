@@ -1,12 +1,14 @@
 import fs from "node:fs";
 
 import { getSessionRuntimeStatus } from "./codex.mjs";
-import { getConfig, listJobs, readJobFile, resolveJobFile } from "./state.mjs";
-import { SESSION_ID_ENV } from "./tracked-jobs.mjs";
+import { isProcessRunning } from "./process.mjs";
+import { getConfig, listJobs, readJobFile, resolveJobFile, updateJobRecord } from "./state.mjs";
+import { appendLogLine, SESSION_ID_ENV } from "./tracked-jobs.mjs";
 import { resolveWorkspaceRoot } from "./workspace.mjs";
 
 export const DEFAULT_MAX_STATUS_JOBS = 8;
 export const DEFAULT_MAX_PROGRESS_LINES = 4;
+export const DEFAULT_MISSING_WORKER_GRACE_MS = 30_000;
 
 export function sortJobsNewestFirst(jobs) {
   return [...jobs].sort((left, right) => String(right.updatedAt ?? "").localeCompare(String(left.updatedAt ?? "")));
@@ -22,6 +24,117 @@ function filterJobsForCurrentSession(jobs, options = {}) {
     return jobs;
   }
   return jobs.filter((job) => job.sessionId === sessionId);
+}
+
+function isActiveJobStatus(status) {
+  return status === "queued" || status === "running";
+}
+
+function toTimestamp(value) {
+  if (value instanceof Date) {
+    return value.getTime();
+  }
+  if (typeof value === "number") {
+    return value;
+  }
+  return Date.parse(value ?? "");
+}
+
+function getNowTimestamp(options) {
+  const value = typeof options.now === "function" ? options.now() : options.now ?? Date.now();
+  const timestamp = toTimestamp(value);
+  if (!Number.isFinite(timestamp)) {
+    throw new Error("Active-job reconciliation requires a valid current time.");
+  }
+  return timestamp;
+}
+
+function getMissingWorkerGraceMs(options) {
+  const value = Number(options.missingWorkerGraceMs ?? DEFAULT_MISSING_WORKER_GRACE_MS);
+  return Number.isFinite(value) && value >= 0 ? value : DEFAULT_MISSING_WORKER_GRACE_MS;
+}
+
+function archiveFailedJob(workspaceRoot, latest, workerPid, errorMessage, completedAt) {
+  const failedJob = updateJobRecord(workspaceRoot, latest.id, (current) => {
+    if (!current || !isActiveJobStatus(current.status)) {
+      return null;
+    }
+    const currentWorkerPid = current.workerPid ?? current.pid;
+    if (currentWorkerPid !== workerPid) {
+      return null;
+    }
+    return {
+      ...current,
+      status: "failed",
+      phase: "failed",
+      pid: null,
+      ...(Number.isInteger(workerPid) && workerPid > 0 ? { workerPid } : {}),
+      completedAt,
+      errorMessage
+    };
+  });
+  if (!failedJob) {
+    return null;
+  }
+  appendLogLine(failedJob.logFile, `${errorMessage} Archived the job as failed.`);
+  return failedJob;
+}
+
+export function reconcileActiveJobs(cwd, options = {}) {
+  const workspaceRoot = resolveWorkspaceRoot(cwd);
+  const processRunning = options.isProcessRunning ?? isProcessRunning;
+  const nowTimestamp = getNowTimestamp(options);
+  const reconciledAt = new Date(nowTimestamp).toISOString();
+  const missingWorkerGraceMs = getMissingWorkerGraceMs(options);
+  const reconciled = [];
+  const workerAliveById = new Map();
+  const inspectedWorkerPidById = new Map();
+
+  for (const job of listJobs(workspaceRoot)) {
+    if (!isActiveJobStatus(job.status)) {
+      continue;
+    }
+
+    const workerPid = job.workerPid ?? job.pid;
+    inspectedWorkerPidById.set(job.id, workerPid ?? null);
+    const hasWorkerPid = Number.isInteger(workerPid) && workerPid > 0;
+    let errorMessage;
+    if (hasWorkerPid) {
+      const workerAlive = processRunning(workerPid);
+      workerAliveById.set(job.id, workerAlive);
+      if (workerAlive) {
+        continue;
+      }
+      errorMessage = `Worker process ${workerPid} is no longer running.`;
+    } else {
+      const startupTimestamp = toTimestamp(job.startedAt ?? job.queuedAt ?? job.createdAt ?? job.updatedAt);
+      if (Number.isFinite(startupTimestamp) && nowTimestamp - startupTimestamp <= missingWorkerGraceMs) {
+        workerAliveById.set(job.id, null);
+        continue;
+      }
+      workerAliveById.set(job.id, false);
+      errorMessage = Number.isFinite(startupTimestamp)
+        ? `No worker PID was recorded within the ${missingWorkerGraceMs}ms startup grace period.`
+        : "No worker PID or valid startup timestamp was recorded.";
+    }
+
+    // Re-read before writing so a worker that completed during the liveness
+    // probe is never overwritten with a synthetic failure.
+    const latest = listJobs(workspaceRoot).find((candidate) => candidate.id === job.id);
+    const latestWorkerPid = latest?.workerPid ?? latest?.pid;
+    if (!latest || !isActiveJobStatus(latest.status) || latestWorkerPid !== workerPid) {
+      workerAliveById.delete(job.id);
+      inspectedWorkerPidById.delete(job.id);
+      continue;
+    }
+
+    const failedJob = archiveFailedJob(workspaceRoot, latest, workerPid, errorMessage, reconciledAt);
+    if (failedJob) {
+      reconciled.push(failedJob);
+    }
+  }
+
+  return { reconciled, workerAliveById, inspectedWorkerPidById };
 }
 
 function getJobTypeLabel(job) {
@@ -160,13 +273,22 @@ function inferLegacyJobPhase(job, progressPreview = []) {
 
 export function enrichJob(job, options = {}) {
   const maxProgressLines = options.maxProgressLines ?? DEFAULT_MAX_PROGRESS_LINES;
+  const workerPid = job.workerPid ?? job.pid ?? null;
+  const hasMatchingWorkerInspection =
+    (options.workerAliveById?.has(job.id) ?? false) && options.inspectedWorkerPidById?.get(job.id) === workerPid;
+  const inspectedWorkerAlive = hasMatchingWorkerInspection ? options.workerAliveById.get(job.id) : undefined;
+  const hasWorkerAlive =
+    hasMatchingWorkerInspection &&
+    (isActiveJobStatus(job.status) || (job.status === "failed" && inspectedWorkerAlive === false));
   const enriched = {
     ...job,
+    ...(hasWorkerAlive ? { workerAlive: inspectedWorkerAlive } : {}),
     kindLabel: getJobTypeLabel(job),
     progressPreview:
       job.status === "queued" || job.status === "running" || job.status === "failed"
         ? readJobProgressPreview(job.logFile, maxProgressLines)
         : [],
+    lastActivityAgo: formatElapsedDuration(job.lastActivityAt),
     elapsed: formatElapsedDuration(job.startedAt ?? job.createdAt, job.completedAt ?? null),
     duration:
       job.status === "completed" || job.status === "failed" || job.status === "cancelled"
@@ -212,6 +334,7 @@ function matchJobReference(jobs, reference, predicate = () => true) {
 
 export function buildStatusSnapshot(cwd, options = {}) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
+  const { workerAliveById, inspectedWorkerPidById } = reconcileActiveJobs(workspaceRoot, options);
   const config = getConfig(workspaceRoot);
   const jobs = sortJobsNewestFirst(filterJobsForCurrentSession(listJobs(workspaceRoot), options));
   const maxJobs = options.maxJobs ?? DEFAULT_MAX_STATUS_JOBS;
@@ -219,14 +342,16 @@ export function buildStatusSnapshot(cwd, options = {}) {
 
   const running = jobs
     .filter((job) => job.status === "queued" || job.status === "running")
-    .map((job) => enrichJob(job, { maxProgressLines }));
+    .map((job) => enrichJob(job, { maxProgressLines, workerAliveById, inspectedWorkerPidById }));
 
   const latestFinishedRaw = jobs.find((job) => job.status !== "queued" && job.status !== "running") ?? null;
-  const latestFinished = latestFinishedRaw ? enrichJob(latestFinishedRaw, { maxProgressLines }) : null;
+  const latestFinished = latestFinishedRaw
+    ? enrichJob(latestFinishedRaw, { maxProgressLines, workerAliveById, inspectedWorkerPidById })
+    : null;
 
   const recent = (options.all ? jobs : jobs.slice(0, maxJobs))
     .filter((job) => job.status !== "queued" && job.status !== "running" && job.id !== latestFinished?.id)
-    .map((job) => enrichJob(job, { maxProgressLines }));
+    .map((job) => enrichJob(job, { maxProgressLines, workerAliveById, inspectedWorkerPidById }));
 
   return {
     workspaceRoot,
@@ -241,6 +366,7 @@ export function buildStatusSnapshot(cwd, options = {}) {
 
 export function buildSingleJobSnapshot(cwd, reference, options = {}) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
+  const { workerAliveById, inspectedWorkerPidById } = reconcileActiveJobs(workspaceRoot, options);
   const jobs = sortJobsNewestFirst(listJobs(workspaceRoot));
   const selected = matchJobReference(jobs, reference);
   if (!selected) {
@@ -249,12 +375,17 @@ export function buildSingleJobSnapshot(cwd, reference, options = {}) {
 
   return {
     workspaceRoot,
-    job: enrichJob(selected, { maxProgressLines: options.maxProgressLines })
+    job: enrichJob(selected, {
+      maxProgressLines: options.maxProgressLines,
+      workerAliveById,
+      inspectedWorkerPidById
+    })
   };
 }
 
-export function resolveResultJob(cwd, reference) {
+export function resolveResultJob(cwd, reference, options = {}) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
+  reconcileActiveJobs(workspaceRoot, options);
   const jobs = sortJobsNewestFirst(reference ? listJobs(workspaceRoot) : filterJobsForCurrentSession(listJobs(workspaceRoot)));
   const selected = matchJobReference(
     jobs,
@@ -280,6 +411,7 @@ export function resolveResultJob(cwd, reference) {
 
 export function resolveCancelableJob(cwd, reference, options = {}) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
+  reconcileActiveJobs(workspaceRoot, options);
   const jobs = sortJobsNewestFirst(listJobs(workspaceRoot));
   const activeJobs = jobs.filter((job) => job.status === "queued" || job.status === "running");
 

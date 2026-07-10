@@ -18,11 +18,9 @@ Core constraint:
 - Your only job is to run the review and return Codex's output verbatim to the user.
 
 Execution mode:
-- If the request includes `--background`, run the `codex:document-reviewer` subagent in the background.
-- If the request includes `--wait`, run the `codex:document-reviewer` subagent in the foreground.
-- If neither flag is present, default to foreground.
-- `--background` and `--wait` are execution flags for Claude Code. Do not forward them to the companion script; the subagent handles the Bash call.
-- Then use `AskUserQuestion` exactly once with two options, putting the recommended option first and suffixing its label with `(Recommended)`:
+- Always run the `codex:document-reviewer` subagent in the foreground. The companion owns detachment.
+- Forward explicit `--background` and `--wait` flags unchanged; do not ask when either is present.
+- If neither flag is present, use `AskUserQuestion` exactly once with two options, putting the recommended option first and suffixing its label with `(Recommended)`:
   - `Wait for results (Recommended)`
   - `Run in background`
 
@@ -38,7 +36,7 @@ Path resolution:
 Subagent prompt:
 When spawning the subagent, tell it:
 - The subcommand is `design-review`
-- The full arguments string to pass: `$ARGUMENTS` (with `--wait` and `--background` stripped)
+- The full effective arguments string, including the selected `--wait` or `--background` flag. Never strip execution flags.
 - Example: "Run: `node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" design-review --path /some/vault/folder focus text`"
 
 Foreground flow:
@@ -47,13 +45,12 @@ Foreground flow:
 - Do not fix any issues mentioned in the review output.
 
 Background flow:
-- Spawn the subagent in the background:
+- Append `--background`, then spawn the subagent inline:
 ```typescript
 Agent({
   subagent_type: "codex:document-reviewer",
-  prompt: `Run: node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" design-review "$ARGUMENTS"`,
-  description: "Codex design review",
-  run_in_background: true
+  prompt: `Run design-review with this single raw argument string: $ARGUMENTS --background`,
+  description: "Codex design review"
 })
 ```
-- After launching, tell the user: "Codex design review started in the background. Check `/codex:status` for progress."
+- Return the companion stdout verbatim. It contains the durable job ID and status command.

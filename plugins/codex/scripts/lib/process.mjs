@@ -8,6 +8,7 @@ export function runCommand(command, args = [], options = {}) {
     encoding: "utf8",
     input: options.input,
     maxBuffer: options.maxBuffer,
+    timeout: options.timeout,
     stdio: options.stdio ?? "pipe",
     shell: process.platform === "win32" ? (process.env.SHELL || true) : false,
     windowsHide: true
@@ -40,6 +41,12 @@ export function binaryAvailable(command, versionArgs = ["--version"], options = 
   if (result.error && /** @type {NodeJS.ErrnoException} */ (result.error).code === "ENOENT") {
     return { available: false, detail: "not found" };
   }
+  if (result.error && /** @type {NodeJS.ErrnoException} */ (result.error).code === "ETIMEDOUT") {
+    return {
+      available: false,
+      detail: options.timeout ? `timed out after ${options.timeout} ms` : result.error.message
+    };
+  }
   if (result.error) {
     return { available: false, detail: result.error.message };
   }
@@ -54,8 +61,32 @@ function looksLikeMissingProcessMessage(text) {
   return /not found|no running instance|cannot find|does not exist|no such process/i.test(text);
 }
 
+function isValidPid(pid) {
+  return Number.isInteger(pid) && pid > 0;
+}
+
+export function isProcessRunning(pid, options = {}) {
+  if (!isValidPid(pid)) {
+    return false;
+  }
+
+  const killImpl = options.killImpl ?? process.kill.bind(process);
+  try {
+    killImpl(pid, 0);
+    return true;
+  } catch (error) {
+    if (error?.code === "ESRCH") {
+      return false;
+    }
+    if (error?.code === "EPERM") {
+      return true;
+    }
+    throw error;
+  }
+}
+
 export function terminateProcessTree(pid, options = {}) {
-  if (!Number.isFinite(pid)) {
+  if (!isValidPid(pid)) {
     return { attempted: false, delivered: false, method: null };
   }
 
@@ -100,20 +131,18 @@ export function terminateProcessTree(pid, options = {}) {
   try {
     killImpl(-pid, "SIGTERM");
     return { attempted: true, delivered: true, method: "process-group" };
-  } catch (error) {
-    if (error?.code !== "ESRCH") {
-      try {
-        killImpl(pid, "SIGTERM");
-        return { attempted: true, delivered: true, method: "process" };
-      } catch (innerError) {
-        if (innerError?.code === "ESRCH") {
-          return { attempted: true, delivered: false, method: "process" };
-        }
-        throw innerError;
+  } catch {
+    // A detached child is normally its own process group, but foreground and
+    // partially-started workers may only be addressable by their positive PID.
+    try {
+      killImpl(pid, "SIGTERM");
+      return { attempted: true, delivered: true, method: "process" };
+    } catch (error) {
+      if (error?.code === "ESRCH") {
+        return { attempted: true, delivered: false, method: "process" };
       }
+      throw error;
     }
-
-    return { attempted: true, delivered: false, method: "process-group" };
   }
 }
 

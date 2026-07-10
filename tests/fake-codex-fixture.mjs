@@ -351,6 +351,16 @@ rl.on("line", (line) => {
         break;
       }
 
+      case "thread/compact/start": {
+        ensureThread(state, message.params.threadId);
+        const turnId = nextTurnId(state);
+        send({ id: message.id, result: {} });
+        if (BEHAVIOR !== "compact-never-completes") {
+          send({ method: "thread/compacted", params: { threadId: message.params.threadId, turnId } });
+        }
+        break;
+      }
+
       case "externalAgentConfig/import": {
         if (BEHAVIOR === "external-import-unsupported") {
           send({ id: message.id, error: { code: -32601, message: "Unsupported method: externalAgentConfig/import" } });
@@ -585,7 +595,12 @@ rl.on("line", (line) => {
           }
         ];
 
-	        if (BEHAVIOR === "interruptible-slow-task") {
+	        if (
+	          BEHAVIOR === "interruptible-slow-task" ||
+	          BEHAVIOR === "interrupt-ack-before-completion" ||
+	          BEHAVIOR === "interrupt-ack-no-completion" ||
+	          BEHAVIOR === "interrupt-fails-no-completion"
+	        ) {
 	          send({ method: "turn/started", params: { threadId: thread.id, turn: buildTurn(turnId) } });
 	          const timer = setTimeout(() => {
 	            if (!interruptibleTurns.has(turnId)) {
@@ -618,6 +633,27 @@ rl.on("line", (line) => {
 	        if (pending) {
 	          clearTimeout(pending.timer);
 	          interruptibleTurns.delete(message.params.turnId);
+	          if (BEHAVIOR === "interrupt-fails-no-completion") {
+	            send({ id: message.id, error: { code: -32000, message: "interrupt failed" } });
+	            break;
+	          }
+	          if (BEHAVIOR === "interrupt-ack-no-completion") {
+	            send({ id: message.id, result: {} });
+	            break;
+	          }
+	          if (BEHAVIOR === "interrupt-ack-before-completion") {
+	            send({ id: message.id, result: {} });
+	            setTimeout(() => {
+	              send({
+	                method: "turn/completed",
+	                params: {
+	                  threadId: pending.threadId,
+	                  turn: buildTurn(message.params.turnId, "interrupted")
+	                }
+	              });
+	            }, 1000);
+	            break;
+	          }
 	          send({
 	            method: "turn/completed",
 	            params: {
@@ -653,6 +689,7 @@ export function buildEnv(binDir) {
   const sep = process.platform === "win32" ? ";" : ":";
   return {
     ...process.env,
+    CODEX_COMPANION_BROKER_IDLE_TTL_MS: process.env.CODEX_COMPANION_BROKER_IDLE_TTL_MS ?? "1000",
     PATH: `${binDir}${sep}${process.env.PATH}`
   };
 }

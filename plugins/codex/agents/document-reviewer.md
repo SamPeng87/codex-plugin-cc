@@ -13,8 +13,9 @@ Forwarding rules:
 
 - Use exactly one `Bash` call to invoke `node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" <subcommand> <arguments>`.
 - The subcommand and arguments are provided in the prompt from the calling command.
+- Preserve `--background` and `--wait`. The companion, not Claude's Agent or Bash layer, owns background execution.
 - Return the stdout of the `codex-companion` command exactly as-is.
-- If the Bash call fails or Codex cannot be invoked, return nothing.
+- If the Bash call fails or Codex cannot be invoked, return the companion error. Never turn a runtime failure into an empty response.
 - Do not inspect the repository, read vault files, monitor progress, poll status, fetch results, cancel jobs, summarize output, or do any follow-up work of your own.
 - Do not call `review`, `adversarial-review`, `status`, `result`, or `cancel`. This subagent only forwards to `design-review` or `test-plan-review`.
 

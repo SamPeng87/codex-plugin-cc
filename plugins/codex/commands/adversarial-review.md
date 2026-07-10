@@ -20,7 +20,7 @@ Core constraint:
 
 Execution mode rules:
 - If the raw arguments include `--wait`, do not ask. Run in the foreground.
-- If the raw arguments include `--background`, do not ask. Run in a Claude background task.
+- If the raw arguments include `--background`, do not ask. Forward it to the companion.
 - Otherwise, estimate the review size before asking:
   - For working-tree review, start with `git status --short --untracked-files=all`.
   - For working-tree review, also inspect both `git diff --shortstat --cached` and `git diff --shortstat`.
@@ -36,10 +36,10 @@ Execution mode rules:
 
 Argument handling:
 - Preserve the user's arguments exactly.
-- Do not strip `--wait` or `--background` yourself.
+- If the user chose a mode interactively, append the corresponding `--wait` or `--background` flag.
 - `--model` and `--effort` are runtime-selection flags. Preserve them for the companion script and do not include them in the focus text.
 - Do not weaken the adversarial framing or rewrite the user's focus text.
-- The companion script parses `--wait` and `--background`, but Claude Code's `Bash(..., run_in_background: true)` is what actually detaches the run.
+- The companion script owns foreground waiting and detached background jobs. Never use Claude's Bash background mode for this command.
 - `/codex:adversarial-review` uses the same review target selection as `/codex:review`.
 - It supports working-tree review, branch review, and `--base <ref>`.
 - It does not support `--scope staged` or `--scope unstaged`.
@@ -55,13 +55,8 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" adversarial-review "$AR
 - Do not fix any issues mentioned in the review output.
 
 Background flow:
-- Launch the review with `Bash` in the background:
-```typescript
-Bash({
-  command: `node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" adversarial-review "$ARGUMENTS"`,
-  description: "Codex adversarial review",
-  run_in_background: true
-})
+- Run the companion normally with one effective raw-argument string that includes `--background`. If the raw arguments already contain it, do not duplicate it:
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" adversarial-review "$ARGUMENTS --background"
 ```
-- Do not call `BashOutput` or wait for completion in this turn.
-- After launching the command, tell the user: "Codex adversarial review started in the background. Check `/codex:status` for progress."
+- Return the companion stdout verbatim. It contains the durable job ID and status command.

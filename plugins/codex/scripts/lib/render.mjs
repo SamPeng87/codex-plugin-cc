@@ -135,6 +135,17 @@ function pushJobDetails(lines, job, options = {}) {
   if (options.showDuration && job.duration) {
     lines.push(`  Duration: ${job.duration}`);
   }
+  if (job.lastActivityAt) {
+    const age = job.lastActivityAgo ? ` (${job.lastActivityAgo} ago)` : "";
+    lines.push(`  Last activity: ${job.lastActivityAt}${age}`);
+  }
+  if (job.workerAlive === true) {
+    lines.push("  Worker process: alive");
+  } else if (job.workerAlive === false) {
+    lines.push("  Worker process: stopped");
+  } else if ((job.status === "queued" || job.status === "running") && job.workerAlive === null) {
+    lines.push("  Worker process: starting");
+  }
   if (job.threadId) {
     lines.push(`  Codex session ID: ${job.threadId}`);
   }

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import process from "node:process";
 
-import { readJobFile, resolveJobFile, resolveJobLogFile, upsertJob, writeJobFile } from "./state.mjs";
+import { resolveJobLogFile, updateJobRecord } from "./state.mjs";
 
 export const SESSION_ID_ENV = "CODEX_COMPANION_SESSION_ID";
 
@@ -74,42 +74,35 @@ export function createJobProgressUpdater(workspaceRoot, jobId) {
 
   return (event) => {
     const normalized = normalizeProgressEvent(event);
-    const patch = { id: jobId };
-    let changed = false;
+    const activityAt = nowIso();
+    const patch = {
+      id: jobId,
+      lastActivityAt: activityAt
+    };
 
     if (normalized.phase && normalized.phase !== lastPhase) {
       lastPhase = normalized.phase;
       patch.phase = normalized.phase;
-      changed = true;
     }
 
     if (normalized.threadId && normalized.threadId !== lastThreadId) {
       lastThreadId = normalized.threadId;
       patch.threadId = normalized.threadId;
-      changed = true;
     }
 
     if (normalized.turnId && normalized.turnId !== lastTurnId) {
       lastTurnId = normalized.turnId;
       patch.turnId = normalized.turnId;
-      changed = true;
     }
 
-    if (!changed) {
-      return;
-    }
-
-    upsertJob(workspaceRoot, patch);
-
-    const jobFile = resolveJobFile(workspaceRoot, jobId);
-    if (!fs.existsSync(jobFile)) {
-      return;
-    }
-
-    const storedJob = readJobFile(jobFile);
-    writeJobFile(workspaceRoot, jobId, {
-      ...storedJob,
-      ...patch
+    updateJobRecord(workspaceRoot, jobId, (current, { indexedJob }) => {
+      if (!indexedJob || !current || !isActiveJobStatus(current.status)) {
+        return null;
+      }
+      return {
+        ...current,
+        ...patch
+      };
     });
   };
 }
@@ -131,74 +124,88 @@ export function createProgressReporter({ stderr = false, logFile = null, onEvent
   };
 }
 
-function readStoredJobOrNull(workspaceRoot, jobId) {
-  const jobFile = resolveJobFile(workspaceRoot, jobId);
-  if (!fs.existsSync(jobFile)) {
-    return null;
-  }
-  return readJobFile(jobFile);
+function isActiveJobStatus(status) {
+  return status === "queued" || status === "running";
 }
 
 export async function runTrackedJob(job, runner, options = {}) {
-  const runningRecord = {
-    ...job,
-    status: "running",
-    startedAt: nowIso(),
-    phase: "starting",
-    pid: process.pid,
-    logFile: options.logFile ?? job.logFile ?? null
-  };
-  writeJobFile(job.workspaceRoot, job.id, runningRecord);
-  upsertJob(job.workspaceRoot, runningRecord);
+  const startedAt = nowIso();
+  const runningRecord = updateJobRecord(job.workspaceRoot, job.id, (current, { indexedJob }) => {
+    if (options.requireExisting && !indexedJob) {
+      return null;
+    }
+    if (current && !isActiveJobStatus(current.status)) {
+      return null;
+    }
+    return {
+      ...(current ?? {}),
+      ...job,
+      status: "running",
+      startedAt,
+      lastActivityAt: startedAt,
+      phase: "starting",
+      pid: process.pid,
+      workerPid: process.pid,
+      logFile: options.logFile ?? job.logFile ?? null
+    };
+  });
+  if (!runningRecord) {
+    throw new Error(`Job ${job.id} is no longer active.`);
+  }
 
   try {
     const execution = await runner();
     const completionStatus = execution.exitStatus === 0 ? "completed" : "failed";
     const completedAt = nowIso();
-    writeJobFile(job.workspaceRoot, job.id, {
-      ...runningRecord,
-      status: completionStatus,
-      threadId: execution.threadId ?? null,
-      turnId: execution.turnId ?? null,
-      pid: null,
-      phase: completionStatus === "completed" ? "done" : "failed",
-      completedAt,
-      result: execution.payload,
-      rendered: execution.rendered
+    const completedRecord = updateJobRecord(job.workspaceRoot, job.id, (current, { indexedJob }) => {
+      if (options.requireExisting && !indexedJob) {
+        return null;
+      }
+      if (!current || !isActiveJobStatus(current.status)) {
+        return null;
+      }
+      return {
+        ...current,
+        status: completionStatus,
+        threadId: execution.threadId ?? null,
+        turnId: execution.turnId ?? null,
+        summary: execution.summary,
+        pid: null,
+        phase: completionStatus === "completed" ? "done" : "failed",
+        lastActivityAt: completedAt,
+        completedAt,
+        result: execution.payload,
+        rendered: execution.rendered
+      };
     });
-    upsertJob(job.workspaceRoot, {
-      id: job.id,
-      status: completionStatus,
-      threadId: execution.threadId ?? null,
-      turnId: execution.turnId ?? null,
-      summary: execution.summary,
-      phase: completionStatus === "completed" ? "done" : "failed",
-      pid: null,
-      completedAt
-    });
-    appendLogBlock(options.logFile ?? job.logFile ?? null, "Final output", execution.rendered);
+    if (completedRecord) {
+      appendLogBlock(options.logFile ?? job.logFile ?? null, "Final output", execution.rendered);
+    }
     return execution;
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
-    const existing = readStoredJobOrNull(job.workspaceRoot, job.id) ?? runningRecord;
     const completedAt = nowIso();
-    writeJobFile(job.workspaceRoot, job.id, {
-      ...existing,
-      status: "failed",
-      phase: "failed",
-      errorMessage,
-      pid: null,
-      completedAt,
-      logFile: options.logFile ?? job.logFile ?? existing.logFile ?? null
+    const failedRecord = updateJobRecord(job.workspaceRoot, job.id, (current, { indexedJob }) => {
+      if (options.requireExisting && !indexedJob) {
+        return null;
+      }
+      if (!current || !isActiveJobStatus(current.status)) {
+        return null;
+      }
+      return {
+        ...current,
+        status: "failed",
+        phase: "failed",
+        errorMessage,
+        pid: null,
+        lastActivityAt: completedAt,
+        completedAt,
+        logFile: options.logFile ?? job.logFile ?? current.logFile ?? null
+      };
     });
-    upsertJob(job.workspaceRoot, {
-      id: job.id,
-      status: "failed",
-      phase: "failed",
-      pid: null,
-      errorMessage,
-      completedAt
-    });
+    if (!failedRecord) {
+      throw error;
+    }
     throw error;
   }
 }

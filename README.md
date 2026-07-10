@@ -97,6 +97,7 @@ Examples:
 ```
 
 This command is read-only and will not perform any changes. When run in the background you can use [`/codex:status`](#codexstatus) to check on the progress and [`/codex:cancel`](#codexcancel) to cancel the ongoing task.
+Background mode is owned by the companion runtime: the slash command returns a durable job ID instead of relying on a long-lived Claude Bash process.
 
 ### `/codex:adversarial-review`
 
@@ -135,9 +136,9 @@ Use it when you want Codex to:
 - take a faster or cheaper pass with a smaller model
 
 > [!NOTE]
-> Depending on the task and the model you choose these tasks might take a long time and it's generally recommended to force the task to be in the background or move the agent to the background.
+> Rescue tasks default to companion-managed background execution because they can run for a long time. Pass `--wait` only when you explicitly want the Claude turn to wait for the final result.
 
-It supports `--background`, `--wait`, `--resume`, and `--fresh`. If you omit `--resume` and `--fresh`, the plugin can offer to continue the latest rescue thread for this repo.
+It supports `--background`, `--wait`, `--resume`, and `--fresh`. Background mode returns a durable job ID that can be inspected with `/codex:status` and `/codex:result`. If you omit `--resume` and `--fresh`, the plugin can offer to continue the latest rescue thread for this repo.
 
 Examples:
 
@@ -186,11 +187,13 @@ Examples:
 ```bash
 /codex:status
 /codex:status task-abc123
+/codex:status task-abc123 --wait --timeout-ms 90000
 ```
 
 Use it to:
 
 - check progress on background work
+- distinguish a live worker from a stale job and see the last real activity time
 - see the latest completed job
 - confirm whether a task is still running
 
@@ -284,6 +287,14 @@ Your configuration will be picked up based on:
 - project-level overrides only load when the [project is trusted](https://developers.openai.com/codex/config-advanced#project-config-files-codexconfigtoml)
 
 Check out the Codex docs for more [configuration options](https://developers.openai.com/codex/config-reference).
+
+### Runtime Safeguards
+
+The companion gives each app-server turn a 45-minute hard deadline so a lost protocol event cannot leave a job running forever. Set `CODEX_COMPANION_TURN_TIMEOUT_MS` to a different millisecond value, or `0` to disable that deadline explicitly.
+
+The shared app-server broker exits after five idle minutes. `CODEX_COMPANION_BROKER_IDLE_TTL_MS` can override that idle period in milliseconds. Active background jobs are unaffected.
+
+Runtime state, jobs, and brokers are keyed by the canonical Git worktree root, so parallel worktrees stay isolated. Claude sessions in the same worktree may share one broker, but jobs retain their Claude session ID and ending one session does not shut down the shared broker.
 
 ### Moving The Work Over To Codex
 

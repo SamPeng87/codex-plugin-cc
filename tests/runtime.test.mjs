@@ -413,6 +413,40 @@ test("design review defaults to gpt-5.6-sol with max reasoning effort", () => {
   assert.doesNotMatch(fakeState.lastTurnStart.prompt, /--effort/);
 });
 
+test("design review --background runs through the generic detached worker", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir);
+  initGitRepo(repo);
+  const vaultFolder = path.join(repo, "vault", "TASK-456");
+  fs.mkdirSync(vaultFolder, { recursive: true });
+  fs.writeFileSync(path.join(vaultFolder, "plan.md"), "# Plan\n\nKeep the design simple.\n");
+  const env = buildEnv(binDir);
+
+  const launched = run(
+    "node",
+    [SCRIPT, "design-review", "--path", vaultFolder, "--background", "--json"],
+    { cwd: repo, env }
+  );
+  assert.equal(launched.status, 0, launched.stderr);
+  const launchPayload = JSON.parse(launched.stdout);
+  assert.equal(launchPayload.status, "queued");
+  assert.match(launchPayload.jobId, /^review-/);
+
+  const waited = run(
+    "node",
+    [SCRIPT, "status", launchPayload.jobId, "--wait", "--timeout-ms", "15000", "--json"],
+    { cwd: repo, env }
+  );
+  assert.equal(waited.status, 0, waited.stderr);
+  assert.equal(JSON.parse(waited.stdout).job.status, "completed");
+
+  const result = run("node", [SCRIPT, "result", launchPayload.jobId, "--json"], { cwd: repo, env });
+  assert.equal(result.status, 0, result.stderr);
+  const resultPayload = JSON.parse(result.stdout);
+  assert.equal(resultPayload.storedJob.result.review, "Design Review");
+});
+
 test("adversarial review accepts the same base-branch targeting as review", () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();
@@ -1058,7 +1092,7 @@ test("adversarial review rejects staged-only scope to match review target select
   assert.match(result.stderr, /Use one of: auto, working-tree, branch, or pass --base <ref>/i);
 });
 
-test("review accepts --background while still running as a tracked review job", () => {
+test("review --background returns a durable job id and completes in a detached worker", () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();
   installFakeCodex(binDir);
@@ -1075,18 +1109,28 @@ test("review accepts --background while still running as a tracked review job", 
 
   assert.equal(launched.status, 0, launched.stderr);
   const launchPayload = JSON.parse(launched.stdout);
-  assert.equal(launchPayload.review, "Review");
-  assert.match(launchPayload.codex.stdout, /No material issues found/);
+  assert.equal(launchPayload.status, "queued");
+  assert.match(launchPayload.jobId, /^review-/);
 
-  const status = run("node", [SCRIPT, "status"], {
+  const status = run("node", [SCRIPT, "status", launchPayload.jobId, "--wait", "--timeout-ms", "15000", "--json"], {
     cwd: repo,
     env: buildEnv(binDir)
   });
 
   assert.equal(status.status, 0, status.stderr);
-  assert.match(status.stdout, /# Codex Status/);
-  assert.match(status.stdout, /Codex Review/);
-  assert.match(status.stdout, /completed/);
+  const statusPayload = JSON.parse(status.stdout);
+  assert.equal(statusPayload.job.id, launchPayload.jobId);
+  assert.equal(statusPayload.job.status, "completed");
+
+  const result = run("node", [SCRIPT, "result", launchPayload.jobId, "--json"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const resultPayload = JSON.parse(result.stdout);
+  assert.equal(resultPayload.job.id, launchPayload.jobId);
+  assert.equal(resultPayload.storedJob.result.review, "Review");
+  assert.match(resultPayload.storedJob.result.codex.stdout, /No material issues found/);
 });
 
 test("status shows phases, hints, and the latest finished job", () => {
@@ -1139,6 +1183,8 @@ test("status shows phases, hints, and the latest finished job", () => {
             jobClass: "review",
             phase: "reviewing",
             threadId: "thr_1",
+            pid: process.pid,
+            workerPid: process.pid,
             summary: "Review working tree diff",
             logFile,
             createdAt: "2026-03-18T15:30:00.000Z",
@@ -1215,6 +1261,8 @@ test("status without a job id only shows jobs from the current Claude session", 
             phase: "reviewing",
             sessionId: "sess-current",
             threadId: "thr_current",
+            pid: process.pid,
+            workerPid: process.pid,
             summary: "Current session review",
             logFile: currentLog,
             createdAt: "2026-03-18T15:30:00.000Z",
@@ -1282,6 +1330,8 @@ test("status preserves adversarial review kind labels", () => {
             jobClass: "review",
             phase: "reviewing",
             threadId: "thr_adv_live",
+            pid: process.pid,
+            workerPid: process.pid,
             summary: "Adversarial review current changes",
             logFile,
             createdAt: "2026-03-18T15:30:00.000Z",
@@ -1354,6 +1404,8 @@ test("status --wait times out cleanly when a job is still active", () => {
             status: "running",
             title: "Codex Task",
             jobClass: "task",
+            pid: process.pid,
+            workerPid: process.pid,
             summary: "Investigate flaky test",
             logFile,
             createdAt: "2026-03-18T15:30:00.000Z",
@@ -1640,7 +1692,11 @@ test("cancel stops an active background job and marks it cancelled", async (t) =
   });
 
   assert.equal(cancelResult.status, 0, cancelResult.stderr);
-  assert.equal(JSON.parse(cancelResult.stdout).status, "cancelled");
+  const cancelPayload = JSON.parse(cancelResult.stdout);
+  assert.equal(cancelPayload.status, "cancelled");
+  assert.equal(cancelPayload.processTerminationAttempted, true);
+  assert.equal(cancelPayload.processTerminationDelivered, true);
+  assert.match(cancelPayload.processTerminationMethod, /process/);
 
   await waitFor(() => {
     try {
@@ -1683,7 +1739,7 @@ test("cancel without a job id ignores active jobs from other Claude sessions", (
             jobClass: "task",
             sessionId: "sess-other",
             summary: "Other session run",
-            updatedAt: "2026-03-24T20:05:00.000Z",
+            updatedAt: new Date().toISOString(),
             logFile
           }
         ]
@@ -1716,11 +1772,29 @@ test("cancel without a job id ignores active jobs from other Claude sessions", (
   assert.equal(state.jobs[0].status, "running");
 });
 
-test("cancel with a job id can still target an active job from another Claude session", () => {
+test("cancel with a job id can still target an active job from another Claude session", async (t) => {
   const workspace = makeTempDir();
   const stateDir = resolveStateDir(workspace);
   const jobsDir = path.join(stateDir, "jobs");
   fs.mkdirSync(jobsDir, { recursive: true });
+
+  const sleeper = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    cwd: workspace,
+    detached: true,
+    stdio: "ignore"
+  });
+  sleeper.unref();
+  t.after(() => {
+    try {
+      process.kill(-sleeper.pid, "SIGTERM");
+    } catch {
+      try {
+        process.kill(sleeper.pid, "SIGTERM");
+      } catch {
+        // Ignore missing process.
+      }
+    }
+  });
 
   const logFile = path.join(jobsDir, "task-other.log");
   fs.writeFileSync(logFile, "", "utf8");
@@ -1738,6 +1812,8 @@ test("cancel with a job id can still target an active job from another Claude se
             jobClass: "task",
             sessionId: "sess-other",
             summary: "Other session run",
+            pid: sleeper.pid,
+            workerPid: sleeper.pid,
             updatedAt: "2026-03-24T20:05:00.000Z",
             logFile
           }
@@ -1762,6 +1838,54 @@ test("cancel with a job id can still target an active job from another Claude se
 
   const state = JSON.parse(fs.readFileSync(path.join(stateDir, "state.json"), "utf8"));
   assert.equal(state.jobs[0].status, "cancelled");
+});
+
+test("cancel fails and archives the job when no cancellation channel accepts the request", () => {
+  const workspace = makeTempDir();
+  const stateDir = resolveStateDir(workspace);
+  const jobsDir = path.join(stateDir, "jobs");
+  fs.mkdirSync(jobsDir, { recursive: true });
+
+  const logFile = path.join(jobsDir, "task-undeliverable.log");
+  const jobFile = path.join(jobsDir, "task-undeliverable.json");
+  const job = {
+    id: "task-undeliverable",
+    status: "running",
+    title: "Codex Task",
+    jobClass: "task",
+    summary: "Lost worker without runtime identifiers",
+    logFile,
+    updatedAt: new Date().toISOString()
+  };
+  fs.writeFileSync(logFile, "", "utf8");
+  fs.writeFileSync(jobFile, `${JSON.stringify(job, null, 2)}\n`, "utf8");
+  fs.writeFileSync(
+    path.join(stateDir, "state.json"),
+    `${JSON.stringify(
+      {
+        version: 1,
+        config: { stopReviewGate: false },
+        jobs: [job]
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+
+  const cancel = run("node", [SCRIPT, "cancel", job.id, "--json"], {
+    cwd: workspace
+  });
+
+  assert.equal(cancel.status, 1);
+  assert.equal(cancel.stdout, "");
+  assert.match(cancel.stderr, /Cancellation was not delivered for task-undeliverable/);
+
+  const state = JSON.parse(fs.readFileSync(path.join(stateDir, "state.json"), "utf8"));
+  const stored = JSON.parse(fs.readFileSync(jobFile, "utf8"));
+  assert.equal(state.jobs[0].status, "failed");
+  assert.equal(stored.status, "failed");
+  assert.doesNotMatch(fs.readFileSync(logFile, "utf8"), /Cancelled by user/);
 });
 
 test("cancel sends turn interrupt to the shared app-server before killing a brokered task", async () => {
@@ -2267,7 +2391,8 @@ test("setup and status honor --cwd when reading shared session runtime", () => {
   const invocationWorkspace = makeTempDir();
 
   saveBrokerSession(targetWorkspace, {
-    endpoint: "unix:/tmp/fake-broker.sock"
+    endpoint: "unix:/tmp/fake-broker.sock",
+    pid: 999_999_999
   });
 
   const status = run("node", [SCRIPT, "status", "--cwd", targetWorkspace], {

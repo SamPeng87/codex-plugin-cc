@@ -11,59 +11,49 @@ function read(relativePath) {
   return fs.readFileSync(path.join(PLUGIN_ROOT, relativePath), "utf8");
 }
 
-test("review command uses AskUserQuestion and background Bash while staying review-only", () => {
+test("review command uses companion-owned background jobs while staying review-only", () => {
   const source = read("commands/review.md");
   assert.match(source, /AskUserQuestion/);
-  assert.match(source, /\bBash\(/);
   assert.match(source, /Do not fix issues/i);
   assert.match(source, /review-only/i);
   assert.match(source, /return Codex's output verbatim to the user/i);
   assert.match(source, /```bash/);
-  assert.match(source, /```typescript/);
   assert.match(source, /review "\$ARGUMENTS"/);
   assert.match(source, /\[--scope auto\|working-tree\|branch\]/);
-  assert.match(source, /run_in_background:\s*true/);
-  assert.match(source, /command:\s*`node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/codex-companion\.mjs" review "\$ARGUMENTS"`/);
-  assert.match(source, /description:\s*"Codex review"/);
-  assert.match(source, /Do not call `BashOutput`/);
+  assert.doesNotMatch(source, /run_in_background:\s*true/);
+  assert.match(source, /review "\$ARGUMENTS --background"/);
   assert.match(source, /Return the command stdout verbatim, exactly as-is/i);
   assert.match(source, /git status --short --untracked-files=all/);
   assert.match(source, /git diff --shortstat/);
   assert.match(source, /Treat untracked files or directories as reviewable work/i);
   assert.match(source, /Recommend waiting only when the review is clearly tiny, roughly 1-2 files total/i);
   assert.match(source, /In every other case, including unclear size, recommend background/i);
-  assert.match(source, /The companion script parses `--wait` and `--background`/i);
-  assert.match(source, /Claude Code's `Bash\(..., run_in_background: true\)` is what actually detaches the run/i);
+  assert.match(source, /companion script owns foreground waiting and detached background jobs/i);
   assert.match(source, /When in doubt, run the review/i);
   assert.match(source, /\(Recommended\)/);
   assert.match(source, /does not support staged-only review, unstaged-only review, or extra focus text/i);
 });
 
-test("adversarial review command uses AskUserQuestion and background Bash while staying review-only", () => {
+test("adversarial review command uses companion-owned background jobs while staying review-only", () => {
   const source = read("commands/adversarial-review.md");
   assert.match(source, /AskUserQuestion/);
-  assert.match(source, /\bBash\(/);
   assert.match(source, /Do not fix issues/i);
   assert.match(source, /review-only/i);
   assert.match(source, /return Codex's output verbatim to the user/i);
   assert.match(source, /```bash/);
-  assert.match(source, /```typescript/);
   assert.match(source, /adversarial-review "\$ARGUMENTS"/);
   assert.match(source, /\[--scope auto\|working-tree\|branch\] \[--model <model>\]/);
   assert.match(source, /--effort <none\|minimal\|low\|medium\|high\|xhigh\|max>/);
   assert.match(source, /do not include them in the focus text/i);
-  assert.match(source, /run_in_background:\s*true/);
-  assert.match(source, /command:\s*`node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/codex-companion\.mjs" adversarial-review "\$ARGUMENTS"`/);
-  assert.match(source, /description:\s*"Codex adversarial review"/);
-  assert.match(source, /Do not call `BashOutput`/);
+  assert.doesNotMatch(source, /run_in_background:\s*true/);
+  assert.match(source, /adversarial-review "\$ARGUMENTS --background"/);
   assert.match(source, /Return the command stdout verbatim, exactly as-is/i);
   assert.match(source, /git status --short --untracked-files=all/);
   assert.match(source, /git diff --shortstat/);
   assert.match(source, /Treat untracked files or directories as reviewable work/i);
   assert.match(source, /Recommend waiting only when the scoped review is clearly tiny, roughly 1-2 files total/i);
   assert.match(source, /In every other case, including unclear size, recommend background/i);
-  assert.match(source, /The companion script parses `--wait` and `--background`/i);
-  assert.match(source, /Claude Code's `Bash\(..., run_in_background: true\)` is what actually detaches the run/i);
+  assert.match(source, /companion script owns foreground waiting and detached background jobs/i);
   assert.match(source, /When in doubt, run the review/i);
   assert.match(source, /\(Recommended\)/);
   assert.match(source, /uses the same review target selection as `\/codex:review`/i);
@@ -80,7 +70,8 @@ test("design-review command spawns document-reviewer subagent while staying revi
   assert.match(source, /Do not fix issues/i);
   assert.match(source, /review-only/i);
   assert.match(source, /design-review/);
-  assert.match(source, /run_in_background:\s*true/);
+  assert.doesNotMatch(source, /run_in_background:\s*true/);
+  assert.match(source, /companion owns detachment/i);
   assert.match(source, /--path <vault-folder>/);
   assert.match(source, /--model <model>/);
   assert.match(source, /--effort <none\|minimal\|low\|medium\|high\|xhigh\|max>/);
@@ -105,7 +96,8 @@ test("test-plan-review command spawns document-reviewer subagent while staying r
   assert.match(source, /Do not fix issues/i);
   assert.match(source, /review-only/i);
   assert.match(source, /test-plan-review/);
-  assert.match(source, /run_in_background:\s*true/);
+  assert.doesNotMatch(source, /run_in_background:\s*true/);
+  assert.match(source, /companion owns detachment/i);
   assert.match(source, /--path <vault-folder>/);
   assert.match(source, /--model <model>/);
   assert.match(source, /--effort <none\|minimal\|low\|medium\|high\|xhigh\|max>/);
@@ -136,6 +128,9 @@ test("execute commands spawn code-executor subagent as independent commands", ()
     assert.match(source, /--resume-last\|--fresh/, `${name} supports resume`);
     assert.match(source, /output verbatim/i, `${name} returns verbatim output`);
     assert.match(source, /codex-companion\.mjs/, `${name} calls companion script`);
+    assert.match(source, /Forward `--background` and `--wait`/i, `${name} forwards execution mode`);
+    assert.match(source, /append `--background`/i, `${name} defaults to durable background execution`);
+    assert.doesNotMatch(source, /run_in_background:\s*true/, `${name} avoids Claude background ownership`);
   }
 
   assert.match(execute, /companion\.mjs" execute/);
@@ -150,6 +145,9 @@ test("execute commands spawn code-executor subagent as independent commands", ()
   assert.match(agent, /model:\s*sonnet/);
   assert.match(agent, /Do not inspect the repository/i);
   assert.match(agent, /Return the stdout.*exactly as-is/i);
+  assert.match(agent, /Preserve `--background` and `--wait`/i);
+  assert.match(agent, /If neither is present, append `--background` exactly once/i);
+  assert.match(agent, /Never turn a runtime failure into an empty response/i);
 });
 
 test("continue is not exposed as a user-facing command", () => {
@@ -196,9 +194,9 @@ test("rescue command absorbs continue semantics", () => {
   assert.match(rescue, /AskUserQuestion/);
   assert.match(rescue, /Continue current Codex thread/);
   assert.match(rescue, /Start a new Codex thread/);
-  assert.match(rescue, /run the `codex:codex-rescue` subagent in the background/i);
-  assert.match(rescue, /default to foreground/i);
-  assert.match(rescue, /Do not forward them to `task`/i);
+  assert.match(rescue, /Always run the `codex:codex-rescue` subagent in the foreground/i);
+  assert.match(rescue, /append `--background`/i);
+  assert.match(rescue, /Forward `--background` and `--wait` to `task`/i);
   assert.match(rescue, /`--model` and `--effort` are runtime-selection flags/i);
   assert.match(rescue, /Leave `--effort` unset unless the user explicitly asks for a specific reasoning effort/i);
   assert.match(rescue, /If they ask for `spark`, map it to `gpt-5\.3-codex-spark`/i);
@@ -214,8 +212,8 @@ test("rescue command absorbs continue semantics", () => {
   assert.match(agent, /--resume/);
   assert.match(agent, /--fresh/);
   assert.match(agent, /thin forwarding wrapper/i);
-  assert.match(agent, /prefer foreground for a small, clearly bounded rescue request/i);
-  assert.match(agent, /If the user did not explicitly choose `--background` or `--wait` and the task looks complicated, open-ended, multi-step, or likely to keep Codex running for a long time, prefer background execution/i);
+  assert.match(agent, /If neither is present, add `--background`/i);
+  assert.match(agent, /companion must create the detached worker/i);
   assert.match(agent, /Use exactly one `Bash` call/i);
   assert.match(agent, /Do not inspect the repository, read files, grep, monitor progress, poll status, fetch results, cancel jobs, summarize output, or do any follow-up work of your own/i);
   assert.match(agent, /Do not call `review`, `adversarial-review`, `status`, `result`, or `cancel`/i);
@@ -224,7 +222,7 @@ test("rescue command absorbs continue semantics", () => {
   assert.match(agent, /If the user asks for `spark`, map that to `--model gpt-5\.3-codex-spark`/i);
   assert.match(agent, /If the user asks for a concrete model name such as `gpt-5\.4-mini`, pass it through with `--model`/i);
   assert.match(agent, /Return the stdout of the `codex-companion` command exactly as-is/i);
-  assert.match(agent, /If the Bash call fails or Codex cannot be invoked, return nothing/i);
+  assert.match(agent, /Never turn a runtime failure into an empty response/i);
   assert.match(agent, /gpt-5-4-prompting/);
   assert.match(agent, /only to tighten the user's request into a better Codex prompt/i);
   assert.match(agent, /Do not use that skill to inspect the repository, reason through the problem yourself, draft a solution, or do any independent work/i);
@@ -235,11 +233,11 @@ test("rescue command absorbs continue semantics", () => {
   assert.match(runtimeSkill, /Leave `--effort` unset unless the user explicitly requests a specific effort/i);
   assert.match(runtimeSkill, /Leave model unset by default/i);
   assert.match(runtimeSkill, /Map `spark` to `--model gpt-5\.3-codex-spark`/i);
-  assert.match(runtimeSkill, /If the forwarded request includes `--background` or `--wait`, treat that as Claude-side execution control only/i);
-  assert.match(runtimeSkill, /Strip it before calling `task`/i);
+  assert.match(runtimeSkill, /Forward explicit `--background` or `--wait` flags to `task`/i);
+  assert.match(runtimeSkill, /If neither execution flag is present, add `--background`/i);
   assert.match(runtimeSkill, /`--effort`: accepted values are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`/i);
   assert.match(runtimeSkill, /Do not inspect the repository, read files, grep, monitor progress, poll status, fetch results, cancel jobs, summarize output, or do any follow-up work of your own/i);
-  assert.match(runtimeSkill, /If the Bash call fails or Codex cannot be invoked, return nothing/i);
+  assert.match(runtimeSkill, /Never turn a runtime failure into an empty response/i);
   assert.match(readme, /`codex:codex-rescue` subagent/i);
   assert.match(readme, /if you do not pass `--model` or `--effort`, Codex chooses its own defaults/i);
   assert.match(readme, /--model gpt-5\.4-mini --effort medium/i);

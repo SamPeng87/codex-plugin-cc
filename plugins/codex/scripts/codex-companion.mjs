@@ -32,13 +32,13 @@ import {
   getConfig,
   listJobs,
   setConfig,
-  upsertJob,
-  writeJobFile
+  updateJobRecord
 } from "./lib/state.mjs";
 import {
   buildSingleJobSnapshot,
   buildStatusSnapshot,
   readStoredJob,
+  reconcileActiveJobs,
   resolveCancelableJob,
   resolveResultJob,
   sortJobsNewestFirst
@@ -86,10 +86,10 @@ function printUsage() {
       "  node scripts/codex-companion.mjs adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [--model <model>] [--effort <none|minimal|low|medium|high|xhigh|max>] [focus text]",
       "  node scripts/codex-companion.mjs design-review [--wait|--background] [--path <vault-folder>|--task <task-id>] [--model <model>] [--effort <none|minimal|low|medium|high|xhigh|max>] [focus text]",
       "  node scripts/codex-companion.mjs test-plan-review [--wait|--background] [--path <vault-folder>|--task <task-id>] [--model <model>] [--effort <none|minimal|low|medium|high|xhigh|max>] [focus text]",
-      "  node scripts/codex-companion.mjs execute --context-file <path> [--phase implement|write-tests|fix-tests] [--model <model>] [--effort <none|minimal|low|medium|high|xhigh|max>] [--write] [--background]",
-      "  node scripts/codex-companion.mjs execute-test --context-file <path> [--model <model>] [--effort <none|minimal|low|medium|high|xhigh|max>] [--write] [--background]",
-      "  node scripts/codex-companion.mjs execute-fix --context-file <path> [--model <model>] [--effort <none|minimal|low|medium|high|xhigh|max>] [--write] [--background]",
-      "  node scripts/codex-companion.mjs task [--background] [--write] [--resume-last|--resume|--fresh] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh|max>] [prompt]",
+      "  node scripts/codex-companion.mjs execute --context-file <path> [--phase implement|write-tests|fix-tests] [--model <model>] [--effort <none|minimal|low|medium|high|xhigh|max>] [--write] [--background|--wait]",
+      "  node scripts/codex-companion.mjs execute-test --context-file <path> [--model <model>] [--effort <none|minimal|low|medium|high|xhigh|max>] [--write] [--background|--wait]",
+      "  node scripts/codex-companion.mjs execute-fix --context-file <path> [--model <model>] [--effort <none|minimal|low|medium|high|xhigh|max>] [--write] [--background|--wait]",
+      "  node scripts/codex-companion.mjs task [--background|--wait] [--write] [--resume-last|--resume|--fresh] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh|max>] [prompt]",
       "  node scripts/codex-companion.mjs transfer [--source <claude-jsonl>] [--json]",
       "  node scripts/codex-companion.mjs status [job-id] [--all] [--json]",
       "  node scripts/codex-companion.mjs result [job-id] [--json]",
@@ -156,6 +156,12 @@ function parseCommandInput(argv, config = {}) {
       ...(config.aliasMap ?? {})
     }
   });
+}
+
+function validateExecutionMode(options) {
+  if (options.background && options.wait) {
+    throw new Error("Choose either --background or --wait.");
+  }
 }
 
 function resolveCommandCwd(options = {}) {
@@ -800,7 +806,7 @@ function buildTaskRunMetadata({ prompt, resumeLast = false }) {
   };
 }
 
-function renderQueuedTaskLaunch(payload) {
+function renderQueuedJobLaunch(payload) {
   return `${payload.title} started in the background as ${payload.jobId}. Check /codex:status ${payload.jobId} for progress.\n`;
 }
 
@@ -853,6 +859,7 @@ function buildTaskJob(workspaceRoot, taskMetadata, write, kind = "task") {
 
 function buildTaskRequest({ cwd, model, effort, prompt, write, resumeLast, jobId, kind }) {
   return {
+    runner: "task",
     cwd,
     model,
     effort,
@@ -919,7 +926,7 @@ async function runForegroundCommand(job, runner, options = {}) {
   return execution;
 }
 
-function spawnDetachedTaskWorker(cwd, jobId) {
+function spawnDetachedJobWorker(cwd, jobId) {
   const scriptPath = path.join(ROOT_DIR, "scripts", "codex-companion.mjs");
   const child = spawn(process.execPath, [scriptPath, "task-worker", "--cwd", cwd, "--job-id", jobId], {
     cwd,
@@ -932,21 +939,61 @@ function spawnDetachedTaskWorker(cwd, jobId) {
   return child;
 }
 
-function enqueueBackgroundTask(cwd, job, request) {
+function enqueueBackgroundJob(cwd, job, request) {
+  reconcileActiveJobs(job.workspaceRoot);
   const { logFile } = createTrackedProgress(job);
   appendLogLine(logFile, "Queued for background execution.");
+  const queuedAt = nowIso();
 
-  const child = spawnDetachedTaskWorker(cwd, job.id);
   const queuedRecord = {
     ...job,
     status: "queued",
     phase: "queued",
-    pid: child.pid ?? null,
+    queuedAt,
+    pid: null,
+    workerPid: null,
+    lastActivityAt: queuedAt,
     logFile,
     request
   };
-  writeJobFile(job.workspaceRoot, job.id, queuedRecord);
-  upsertJob(job.workspaceRoot, queuedRecord);
+  updateJobRecord(job.workspaceRoot, job.id, (current) => {
+    if (current) {
+      throw new Error(`Job ${job.id} already exists.`);
+    }
+    return queuedRecord;
+  });
+
+  let child;
+  try {
+    child = spawnDetachedJobWorker(cwd, job.id);
+  } catch (error) {
+    const completedAt = nowIso();
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    updateJobRecord(job.workspaceRoot, job.id, (current) => {
+      if (!current || (current.status !== "queued" && current.status !== "running")) {
+        return null;
+      }
+      return {
+        ...current,
+        status: "failed",
+        phase: "failed",
+        completedAt,
+        errorMessage
+      };
+    });
+    throw error;
+  }
+
+  updateJobRecord(job.workspaceRoot, job.id, (current) => {
+    if (!current || (current.status !== "queued" && current.status !== "running")) {
+      return null;
+    }
+    return {
+      ...current,
+      pid: child.pid ?? current.pid ?? null,
+      workerPid: child.pid ?? current.workerPid ?? null
+    };
+  });
 
   return {
     payload: {
@@ -968,6 +1015,7 @@ async function handleReviewCommand(argv, config) {
       m: "model"
     }
   });
+  validateExecutionMode(options);
 
   const cwd = resolveCommandCwd(options);
   const workspaceRoot = resolveCommandWorkspace(options);
@@ -992,19 +1040,28 @@ async function handleReviewCommand(argv, config) {
     jobClass: "review",
     summary: metadata.summary
   });
+
+  const request = {
+    runner: "review",
+    cwd,
+    base: options.base,
+    scope: options.scope,
+    model,
+    effort,
+    focusText,
+    reviewName: config.reviewName
+  };
+
+  if (options.background) {
+    ensureCodexAvailable(cwd);
+    const { payload } = enqueueBackgroundJob(cwd, job, request);
+    outputCommandResult(payload, renderQueuedJobLaunch(payload), options.json);
+    return;
+  }
+
   await runForegroundCommand(
     job,
-    (progress) =>
-      executeReviewRun({
-        cwd,
-        base: options.base,
-        scope: options.scope,
-        model,
-        effort,
-        focusText,
-        reviewName: config.reviewName,
-        onProgress: progress
-      }),
+    (progress) => executeReviewRun({ ...request, onProgress: progress }),
     { json: options.json }
   );
 }
@@ -1019,6 +1076,7 @@ async function handleDocumentReviewCommand(argv, config) {
       t: "task"
     }
   });
+  validateExecutionMode(options);
 
   const cwd = resolveCommandCwd(options);
   const workspaceRoot = resolveCommandWorkspace(options);
@@ -1050,20 +1108,28 @@ async function handleDocumentReviewCommand(argv, config) {
     summary: `${config.reviewName} of ${targetLabel}`
   });
 
+  const request = {
+    runner: "document-review",
+    cwd,
+    vaultFolder,
+    primaryDoc: config.primaryDoc,
+    includeRelated: config.includeRelated,
+    model,
+    effort,
+    focusText,
+    reviewName: config.reviewName
+  };
+
+  if (options.background) {
+    ensureCodexAvailable(cwd);
+    const { payload } = enqueueBackgroundJob(cwd, job, request);
+    outputCommandResult(payload, renderQueuedJobLaunch(payload), options.json);
+    return;
+  }
+
   await runForegroundCommand(
     job,
-    (progress) =>
-      executeDocumentReviewRun({
-        cwd,
-        vaultFolder,
-        primaryDoc: config.primaryDoc,
-        includeRelated: config.includeRelated,
-        model,
-        effort,
-        focusText,
-        reviewName: config.reviewName,
-        onProgress: progress
-      }),
+    (progress) => executeDocumentReviewRun({ ...request, onProgress: progress }),
     { json: options.json }
   );
 }
@@ -1071,7 +1137,7 @@ async function handleDocumentReviewCommand(argv, config) {
 async function handleExecute(argv) {
   const { options, positionals } = parseCommandInput(argv, {
     valueOptions: ["context-file", "model", "effort", "cwd", "phase", "path", "task"],
-    booleanOptions: ["json", "write", "resume-last", "resume", "fresh", "background"],
+    booleanOptions: ["json", "write", "resume-last", "resume", "fresh", "background", "wait"],
     aliasMap: {
       m: "model",
       f: "context-file",
@@ -1079,6 +1145,7 @@ async function handleExecute(argv) {
       t: "task"
     }
   });
+  validateExecutionMode(options);
 
   const cwd = resolveCommandCwd(options);
   const workspaceRoot = resolveCommandWorkspace(options);
@@ -1142,8 +1209,8 @@ async function handleExecute(argv) {
     ensureCodexAvailable(cwd);
     const job = buildTaskJob(workspaceRoot, taskMetadata, write, kind);
     const request = buildTaskRequest({ cwd, model, effort, prompt, write, resumeLast, jobId: job.id, kind });
-    const { payload } = enqueueBackgroundTask(cwd, job, request);
-    outputCommandResult(payload, renderQueuedTaskLaunch(payload), options.json);
+    const { payload } = enqueueBackgroundJob(cwd, job, request);
+    outputCommandResult(payload, renderQueuedJobLaunch(payload), options.json);
     return;
   }
 
@@ -1176,11 +1243,12 @@ async function handleReview(argv) {
 async function handleTask(argv) {
   const { options, positionals } = parseCommandInput(argv, {
     valueOptions: ["model", "effort", "cwd", "prompt-file"],
-    booleanOptions: ["json", "write", "resume-last", "resume", "fresh", "background"],
+    booleanOptions: ["json", "write", "resume-last", "resume", "fresh", "background", "wait"],
     aliasMap: {
       m: "model"
     }
   });
+  validateExecutionMode(options);
 
   const cwd = resolveCommandCwd(options);
   const workspaceRoot = resolveCommandWorkspace(options);
@@ -1213,8 +1281,8 @@ async function handleTask(argv) {
       resumeLast,
       jobId: job.id
     });
-    const { payload } = enqueueBackgroundTask(cwd, job, request);
-    outputCommandResult(payload, renderQueuedTaskLaunch(payload), options.json);
+    const { payload } = enqueueBackgroundJob(cwd, job, request);
+    outputCommandResult(payload, renderQueuedJobLaunch(payload), options.json);
     return;
   }
 
@@ -1249,6 +1317,20 @@ async function handleTransfer(argv) {
   outputCommandResult(payload, rendered, options.json);
 }
 
+function executeStoredJobRequest(request, progress) {
+  const runRequest = { ...request, onProgress: progress };
+  switch (request.runner ?? "task") {
+    case "task":
+      return executeTaskRun(runRequest);
+    case "review":
+      return executeReviewRun(runRequest);
+    case "document-review":
+      return executeDocumentReviewRun(runRequest);
+    default:
+      throw new Error(`Stored job has an unsupported runner: ${request.runner}.`);
+  }
+}
+
 async function handleTaskWorker(argv) {
   const { options } = parseCommandInput(argv, {
     valueOptions: ["cwd", "job-id"]
@@ -1267,7 +1349,7 @@ async function handleTaskWorker(argv) {
 
   const request = storedJob.request;
   if (!request || typeof request !== "object") {
-    throw new Error(`Stored job ${options["job-id"]} is missing its task request payload.`);
+    throw new Error(`Stored job ${options["job-id"]} is missing its request payload.`);
   }
 
   const { logFile, progress } = createTrackedProgress(
@@ -1285,12 +1367,8 @@ async function handleTaskWorker(argv) {
       workspaceRoot,
       logFile
     },
-    () =>
-      executeTaskRun({
-        ...request,
-        onProgress: progress
-      }),
-    { logFile }
+    () => executeStoredJobRequest(request, progress),
+    { logFile, requireExisting: true }
   );
 }
 
@@ -1397,39 +1475,87 @@ async function handleCancel(argv) {
     );
   }
 
-  terminateProcessTree(job.pid ?? Number.NaN);
-  appendLogLine(job.logFile, "Cancelled by user.");
+  const workerPid = existing.pid ?? existing.workerPid ?? job.pid ?? job.workerPid ?? Number.NaN;
+  let termination;
+  try {
+    termination = terminateProcessTree(workerPid);
+  } catch (error) {
+    termination = {
+      attempted: true,
+      delivered: false,
+      method: null,
+      detail: error instanceof Error ? error.message : String(error)
+    };
+  }
 
   const completedAt = nowIso();
-  const nextJob = {
-    ...job,
-    status: "cancelled",
-    phase: "cancelled",
-    pid: null,
-    completedAt,
-    errorMessage: "Cancelled by user."
-  };
+  const cancellationDelivered = interrupt.interrupted || termination.delivered;
+  if (!cancellationDelivered) {
+    const detail = [interrupt.detail, termination.detail].filter(Boolean).join("; ");
+    const errorMessage = `Cancellation was not delivered for ${job.id}${detail ? `: ${detail}` : "."}`;
+    appendLogLine(job.logFile, errorMessage);
 
-  writeJobFile(workspaceRoot, job.id, {
-    ...existing,
-    ...nextJob,
-    cancelledAt: completedAt
+    const hasValidWorkerPid = Number.isInteger(workerPid) && workerPid > 0;
+    const workerUnavailable = !hasValidWorkerPid || (!termination.delivered && !termination.detail);
+    if (!workerUnavailable) {
+      updateJobRecord(workspaceRoot, job.id, (current) => {
+        if (!current || !isActiveJobStatus(current.status)) {
+          return null;
+        }
+        return {
+          ...current,
+          cancellationAttemptedAt: completedAt,
+          cancellationError: errorMessage
+        };
+      });
+      throw new Error(errorMessage);
+    }
+
+    updateJobRecord(workspaceRoot, job.id, (current) => {
+      if (!current || !isActiveJobStatus(current.status)) {
+        return null;
+      }
+      return {
+        ...current,
+        status: "failed",
+        phase: "failed",
+        pid: null,
+        completedAt,
+        errorMessage
+      };
+    });
+    throw new Error(errorMessage);
+  }
+
+  const nextJob = updateJobRecord(workspaceRoot, job.id, (current) => {
+    if (!current || !isActiveJobStatus(current.status)) {
+      return null;
+    }
+    return {
+      ...current,
+      status: "cancelled",
+      phase: "cancelled",
+      pid: null,
+      completedAt,
+      cancelledAt: completedAt,
+      errorMessage: "Cancelled by user."
+    };
   });
-  upsertJob(workspaceRoot, {
-    id: job.id,
-    status: "cancelled",
-    phase: "cancelled",
-    pid: null,
-    errorMessage: "Cancelled by user.",
-    completedAt
-  });
+  if (!nextJob) {
+    const latest = readStoredJob(workspaceRoot, job.id);
+    throw new Error(`Job ${job.id} reached ${latest?.status ?? "an unknown state"} before cancellation was recorded.`);
+  }
+  appendLogLine(job.logFile, "Cancelled by user.");
 
   const payload = {
     jobId: job.id,
     status: "cancelled",
     title: job.title,
     turnInterruptAttempted: interrupt.attempted,
-    turnInterrupted: interrupt.interrupted
+    turnInterrupted: interrupt.interrupted,
+    processTerminationAttempted: termination.attempted,
+    processTerminationDelivered: termination.delivered,
+    processTerminationMethod: termination.method
   };
 
   outputCommandResult(payload, renderCancelReport(nextJob), options.json);

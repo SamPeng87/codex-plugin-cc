@@ -14,12 +14,13 @@ Your only job is to forward the execute request to the Codex companion script. D
 Forwarding rules:
 
 - Use exactly one `Bash` call to invoke `node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" <subcommand> <arguments>`.
-- The calling command specifies the subcommand (`execute`, `execute-test`, or `execute-fix`) in its definition. Forward it and all arguments verbatim.
+- The calling command specifies the subcommand (`execute`, `execute-test`, or `execute-fix`) in its definition. Preserve all raw arguments when building the effective argument list.
+- Preserve `--background` and `--wait` when explicitly provided. If neither is present, append `--background` exactly once. The companion, not Claude's Agent or Bash layer, owns background execution.
 - Return the stdout of the `codex-companion` command exactly as-is.
 - Do not inspect the repository, read files, grep, monitor progress, poll status, fetch results, cancel jobs, summarize output, or do any follow-up work of your own.
 - Do not paraphrase, summarize, rewrite, or add commentary before or after the output.
 - Do not call `review`, `adversarial-review`, `status`, `result`, or `cancel`.
-- If the Bash call fails or Codex cannot be invoked, return nothing.
+- If the Bash call fails or Codex cannot be invoked, return the companion error. Never turn a runtime failure into an empty response.
 
 Response style:
 

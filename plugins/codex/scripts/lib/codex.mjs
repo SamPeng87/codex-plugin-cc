@@ -50,6 +50,10 @@ const DEFAULT_CONTINUE_PROMPT =
   "Continue from the current thread state. Pick the next highest-value step and follow through until the task is resolved.";
 const EXTERNAL_AGENT_IMPORT_COMPLETED = "externalAgentConfig/import/completed";
 const EXTERNAL_AGENT_IMPORT_TIMEOUT_MS = 2 * 60 * 1000;
+const CODEX_AVAILABILITY_TIMEOUT_MS = 5_000;
+export const TURN_TIMEOUT_ENV = "CODEX_COMPANION_TURN_TIMEOUT_MS";
+const DEFAULT_TURN_TIMEOUT_MS = 45 * 60 * 1000;
+const TURN_INTERRUPT_TIMEOUT_MS = 5_000;
 
 function cleanCodexStderr(stderr) {
   return stderr
@@ -343,6 +347,16 @@ function clearCompletionTimer(state) {
   }
 }
 
+function canInferFinalAnswer(state) {
+  return (
+    !state.completed &&
+    !state.finalTurn &&
+    state.finalAnswerSeen &&
+    state.pendingCollaborations.size === 0 &&
+    state.activeSubagentTurns.size === 0
+  );
+}
+
 function completeTurn(state, turn = null, options = {}) {
   if (state.completed) {
     return;
@@ -371,21 +385,14 @@ function completeTurn(state, turn = null, options = {}) {
 }
 
 function scheduleInferredCompletion(state) {
-  if (state.completed || state.finalTurn || !state.finalAnswerSeen) {
-    return;
-  }
-
-  if (state.pendingCollaborations.size > 0 || state.activeSubagentTurns.size > 0) {
+  if (!canInferFinalAnswer(state)) {
     return;
   }
 
   clearCompletionTimer(state);
   state.completionTimer = setTimeout(() => {
     state.completionTimer = null;
-    if (state.completed || state.finalTurn || !state.finalAnswerSeen) {
-      return;
-    }
-    if (state.pendingCollaborations.size > 0 || state.activeSubagentTurns.size > 0) {
+    if (!canInferFinalAnswer(state)) {
       return;
     }
     completeTurn(state, null, { inferred: true });
@@ -556,9 +563,99 @@ function applyTurnNotification(state, message) {
   }
 }
 
-async function captureTurn(client, threadId, startRequest, options = {}) {
+function resolveTurnTimeoutMs(value, env = process.env) {
+  const configured = value ?? env?.[TURN_TIMEOUT_ENV];
+  if (configured === undefined || configured === null || configured === "") {
+    return DEFAULT_TURN_TIMEOUT_MS;
+  }
+  const timeoutMs = Number(configured);
+  return Number.isFinite(timeoutMs) && timeoutMs >= 0 ? timeoutMs : DEFAULT_TURN_TIMEOUT_MS;
+}
+
+function createTurnTimeoutError(state, timeoutMs) {
+  const turnId = state.turnId ?? "pending";
+  const error = /** @type {Error & { code?: string, threadId?: string, turnId?: string | null, timeoutMs?: number }} */ (
+    new Error(`Codex turn ${turnId} on thread ${state.threadId} timed out after ${timeoutMs} ms.`)
+  );
+  error.code = "ETIMEDOUT";
+  error.threadId = state.threadId;
+  error.turnId = state.turnId;
+  error.timeoutMs = timeoutMs;
+  return error;
+}
+
+function createTurnConnectionError(client, state) {
+  const turnId = state.turnId ?? "pending";
+  const detail = client.exitError?.message ? `: ${client.exitError.message}` : ".";
+  const error = /** @type {Error & { code?: string }} */ (
+    new Error(`Codex app-server connection closed while waiting for thread ${state.threadId}, turn ${turnId}${detail}`, {
+      cause: client.exitError ?? undefined
+    })
+  );
+  if (client.exitError?.code) {
+    error.code = client.exitError.code;
+  }
+  return error;
+}
+
+async function interruptTimedOutTurn(client, state) {
+  if (!state.turnId || client.closed) {
+    return;
+  }
+  try {
+    await client.request(
+      "turn/interrupt",
+      { threadId: state.threadId, turnId: state.turnId },
+      { timeoutMs: TURN_INTERRUPT_TIMEOUT_MS }
+    );
+  } catch {
+    // The deadline is authoritative; interruption is best-effort cleanup.
+  }
+}
+
+export async function captureTurn(client, threadId, startRequest, options = {}) {
   const state = createTurnCaptureState(threadId, options);
   const previousHandler = client.notificationHandler;
+  const timeoutMs = resolveTurnTimeoutMs(options.timeoutMs, options.env);
+  let deadlineTimer = null;
+  const deadline =
+    timeoutMs === 0
+      ? new Promise(() => {})
+      : new Promise((resolve) => {
+          deadlineTimer = setTimeout(() => resolve({ type: "timeout" }), timeoutMs);
+          deadlineTimer.unref?.();
+        });
+  const connectionExit = client.exitPromise.then(() => ({ type: "exit" }));
+
+  const raceLifecycle = (promise) =>
+    Promise.race([
+      Promise.resolve(promise).then(
+        (value) => ({ type: "value", value }),
+        (error) => ({ type: "error", error })
+      ),
+      connectionExit,
+      deadline
+    ]);
+
+  const unwrapLifecycle = async (outcome) => {
+    if (outcome.type === "value") {
+      return outcome.value;
+    }
+    if (outcome.type === "error") {
+      throw outcome.error;
+    }
+    if (canInferFinalAnswer(state)) {
+      completeTurn(state, null, { inferred: true });
+      return state;
+    }
+    if (outcome.type === "timeout") {
+      const error = createTurnTimeoutError(state, timeoutMs);
+      emitProgress(state.onProgress, error.message, "failed");
+      await interruptTimedOutTurn(client, state);
+      throw error;
+    }
+    throw createTurnConnectionError(client, state);
+  };
 
   client.setNotificationHandler((message) => {
     if (!state.turnId) {
@@ -582,7 +679,7 @@ async function captureTurn(client, threadId, startRequest, options = {}) {
   });
 
   try {
-    const response = await startRequest();
+    const response = await unwrapLifecycle(await raceLifecycle(Promise.resolve().then(startRequest)));
     options.onResponse?.(response, state);
     state.turnId = response.turn?.id ?? null;
     if (state.turnId) {
@@ -603,17 +700,20 @@ async function captureTurn(client, threadId, startRequest, options = {}) {
       completeTurn(state, response.turn);
     }
 
-    return await state.completion;
+    return await unwrapLifecycle(await raceLifecycle(state.completion));
   } finally {
+    if (deadlineTimer) {
+      clearTimeout(deadlineTimer);
+    }
     clearCompletionTimer(state);
     client.setNotificationHandler(previousHandler ?? null);
   }
 }
 
-async function withAppServer(cwd, fn) {
+async function withAppServer(cwd, fn, clientOptions = {}) {
   let client = null;
   try {
-    client = await CodexAppServerClient.connect(cwd);
+    client = await CodexAppServerClient.connect(cwd, clientOptions);
     const result = await fn(client);
     await client.close();
     return result;
@@ -632,7 +732,7 @@ async function withAppServer(cwd, fn) {
       throw error;
     }
 
-    const directClient = await CodexAppServerClient.connect(cwd, { disableBroker: true });
+    const directClient = await CodexAppServerClient.connect(cwd, { ...clientOptions, disableBroker: true });
     try {
       return await fn(directClient);
     } finally {
@@ -721,7 +821,7 @@ async function requestExternalAgentSessionImport(client, params) {
   }, EXTERNAL_AGENT_IMPORT_TIMEOUT_MS);
 
   try {
-    await client.request("externalAgentConfig/import", params);
+    await client.request("externalAgentConfig/import", params, { timeoutMs: EXTERNAL_AGENT_IMPORT_TIMEOUT_MS });
     await completed;
   } finally {
     clearTimeout(timeout);
@@ -883,13 +983,18 @@ async function getCodexAuthStatusFromClient(client, cwd) {
   }
 }
 
-export function getCodexAvailability(cwd) {
-  const versionStatus = binaryAvailable("codex", ["--version"], { cwd });
+export function getCodexAvailability(cwd, options = {}) {
+  const timeout =
+    Number.isFinite(options.timeoutMs) && options.timeoutMs > 0
+      ? options.timeoutMs
+      : CODEX_AVAILABILITY_TIMEOUT_MS;
+  const probeOptions = { cwd, env: options.env, timeout };
+  const versionStatus = binaryAvailable("codex", ["--version"], probeOptions);
   if (!versionStatus.available) {
     return versionStatus;
   }
 
-  const appServerStatus = binaryAvailable("codex", ["app-server", "--help"], { cwd });
+  const appServerStatus = binaryAvailable("codex", ["app-server", "--help"], probeOptions);
   if (!appServerStatus.available) {
     return {
       available: false,
@@ -903,8 +1008,12 @@ export function getCodexAvailability(cwd) {
   };
 }
 
-export function getSessionRuntimeStatus(env = process.env, cwd = process.cwd()) {
-  const endpoint = env?.[BROKER_ENDPOINT_ENV] ?? loadBrokerSession(cwd)?.endpoint ?? null;
+export function getSessionRuntimeStatus(_env = process.env, cwd = process.cwd()) {
+  const brokerSession = loadBrokerSession(cwd);
+  const endpoint =
+    Number.isInteger(brokerSession?.pid) && brokerSession.pid > 0 && !brokerSession.stoppedAt
+      ? brokerSession.endpoint ?? null
+      : null;
   if (endpoint) {
     return {
       mode: "shared",
@@ -1030,6 +1139,8 @@ export async function runAppServerReview(cwd, options = {}) {
         }),
       {
         onProgress: options.onProgress,
+        timeoutMs: options.turnTimeoutMs,
+        env: options.env,
         onResponse(response, state) {
           if (response.reviewThreadId) {
             state.threadIds.add(response.reviewThreadId);
@@ -1052,6 +1163,10 @@ export async function runAppServerReview(cwd, options = {}) {
       error: turnState.error,
       stderr: cleanCodexStderr(client.stderr)
     };
+  }, {
+    env: options.env,
+    requestTimeoutMs: options.requestTimeoutMs,
+    closeTimeoutMs: options.closeTimeoutMs
   });
 }
 
@@ -1140,7 +1255,11 @@ export async function runAppServerTurn(cwd, options = {}) {
           effort: options.effort ?? null,
           outputSchema: options.outputSchema ?? null
         }),
-      { onProgress: options.onProgress }
+      {
+        onProgress: options.onProgress,
+        timeoutMs: options.turnTimeoutMs,
+        env: options.env
+      }
     );
 
     return {
@@ -1156,6 +1275,11 @@ export async function runAppServerTurn(cwd, options = {}) {
       touchedFiles: collectTouchedFiles(turnState.fileChanges),
       commandExecutions: turnState.commandExecutions
     };
+  }, {
+    env: options.env,
+    disableBroker: options.disableBroker,
+    requestTimeoutMs: options.requestTimeoutMs,
+    closeTimeoutMs: options.closeTimeoutMs
   });
 }
 

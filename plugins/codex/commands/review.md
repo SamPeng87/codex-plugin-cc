@@ -17,7 +17,7 @@ Core constraint:
 
 Execution mode rules:
 - If the raw arguments include `--wait`, do not ask. Run the review in the foreground.
-- If the raw arguments include `--background`, do not ask. Run the review in a Claude background task.
+- If the raw arguments include `--background`, do not ask. Forward it to the companion.
 - Otherwise, estimate the review size before asking:
   - For working-tree review, start with `git status --short --untracked-files=all`.
   - For working-tree review, also inspect both `git diff --shortstat --cached` and `git diff --shortstat`.
@@ -33,9 +33,9 @@ Execution mode rules:
 
 Argument handling:
 - Preserve the user's arguments exactly.
-- Do not strip `--wait` or `--background` yourself.
+- If the user chose a mode interactively, append the corresponding `--wait` or `--background` flag.
 - Do not add extra review instructions or rewrite the user's intent.
-- The companion script parses `--wait` and `--background`, but Claude Code's `Bash(..., run_in_background: true)` is what actually detaches the run.
+- The companion script owns foreground waiting and detached background jobs. Never use Claude's Bash background mode for this command.
 - `/codex:review` is native-review only. It does not support staged-only review, unstaged-only review, or extra focus text.
 - If the user needs custom review instructions or more adversarial framing, they should use `/codex:adversarial-review`.
 
@@ -49,13 +49,8 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" review "$ARGUMENTS"
 - Do not fix any issues mentioned in the review output.
 
 Background flow:
-- Launch the review with `Bash` in the background:
-```typescript
-Bash({
-  command: `node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" review "$ARGUMENTS"`,
-  description: "Codex review",
-  run_in_background: true
-})
+- Run the companion normally with one effective raw-argument string that includes `--background`. If the raw arguments already contain it, do not duplicate it:
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" review "$ARGUMENTS --background"
 ```
-- Do not call `BashOutput` or wait for completion in this turn.
-- After launching the command, tell the user: "Codex review started in the background. Check `/codex:status` for progress."
+- Return the companion stdout verbatim. It contains the durable job ID and status command.
